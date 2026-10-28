@@ -25,14 +25,30 @@ from database import (
     get_challenge_status,
     is_announcement_posted_today,
     get_cached_bonus_problems,
-    save_cached_bonus_problems
+    save_cached_bonus_problems,
+    prune_expired_inactive_participants
 )
 from leetcode import (
     fetch_leetcode_daily,
     create_problem_embed,
-    get_random_quote,
     fetch_bonus_practice_problems,
     create_practice_embed
+)
+from phrases import (
+    get_morning_title,
+    get_morning_quote,
+    get_midday_title,
+    get_midday_quote,
+    get_evening_title,
+    get_evening_quote,
+    get_trigger_quote,
+    get_solved_title,
+    get_solved_subtitle,
+    get_server_sweep_title,
+    get_server_sweep_desc,
+    get_sunday_champion_title,
+    get_sunday_champion_desc,
+    check_milestone
 )
 
 # Load environment configuration
@@ -105,14 +121,35 @@ class LeetCodeBot(commands.Bot):
         )
         print(f"Scheduled 8:30 PM evening reminder at {EVENING_HOUR:02d}:{EVENING_MINUTE:02d} {TIMEZONE}.")
 
+        # Sunday 11:00 AM IST - Weekly Champion Spotlight
+        self.scheduler.add_job(
+            send_sunday_champion_job,
+            "cron",
+            day_of_week="sun",
+            hour=11,
+            minute=0,
+            timezone=tz
+        )
+        print(f"Scheduled Sunday 11:00 AM weekly champion celebration.")
+
+        # Daily 00:05 IST - Expired Inactive Participants Pruning (> 60 days)
+        self.scheduler.add_job(
+            prune_expired_participants_job,
+            "cron",
+            hour=0,
+            minute=5,
+            timezone=tz
+        )
+        print("Scheduled daily midnight pruning of inactive participants (>60 days).")
+
         self.scheduler.start()
 
-        # 4. Sync Application Slash Commands
+        # 4. Sync Application Slash Commands (Global)
         try:
             synced = await self.tree.sync()
-            print(f"Synced {len(synced)} application slash commands with Discord.")
+            print(f"Synced {len(synced)} global application slash commands with Discord.")
         except Exception as e:
-            print(f"Warning: Failed to sync slash commands: {e}")
+            print(f"Warning: Failed to sync global slash commands: {e}")
 
     async def close(self):
         if self.scheduler.running:
@@ -184,9 +221,12 @@ async def handle_solve_interaction(interaction: discord.Interaction):
             await interaction.followup.send(embeds=[embed, practice_embed], ephemeral=True)
             return
 
+        title = get_solved_title()
+        subtitle = get_solved_subtitle()
         embed = discord.Embed(
-            title="Challenge Completed! 🏆",
+            title=title,
             description=(
+                f"{subtitle}\n\n"
                 f"Congratulations {interaction.user.mention}! Your submission for `{today_date}` has been logged.\n"
                 f"You will **not** be pinged in today's check-ins.\n\n"
                 f"🔥 Current Streak: **{res['current_streak']} days**\n"
@@ -197,6 +237,34 @@ async def handle_solve_interaction(interaction: discord.Interaction):
         )
         embed.set_footer(text="Keep the momentum going! Here is your 4-problem bonus practice track:")
         await interaction.followup.send(embeds=[embed, practice_embed], ephemeral=True)
+
+        # Check for milestone celebration (7, 28, 56, 30, 60, 90, 100, 180, 365 days...)
+        milestone = res.get("milestone")
+        if milestone:
+            channel = interaction.channel
+            if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+                channel = bot.get_channel(CHANNEL_ID)
+            if channel:
+                badge = milestone.get("badge", "🎉")
+                m_title = milestone.get("title", f"{res['current_streak']}-Day Streak Milestone!")
+                m_desc = milestone.get("desc", "Incredible persistence and dedication!")
+                milestone_embed = discord.Embed(
+                    title=f"{badge} {m_title}",
+                    description=(
+                        f"Huge milestone reached! Let's celebrate {interaction.user.mention} for achieving "
+                        f"an unbroken streak of **{res['current_streak']} days**! 🔥\n\n"
+                        f"{m_desc}\n\n"
+                        f"🏆 Highest Streak: **{res['highest_streak']} days** | 📚 Total Solved: **{res['total_solved']} problems**"
+                    ),
+                    color=discord.Color.gold(),
+                    timestamp=datetime.now()
+                )
+                milestone_embed.set_footer(text="LeetCode Milestone Celebration • Keep the streak alive!")
+                await channel.send(
+                    content=f"🎉 **MILESTONE ALERT!** Shoutout to {interaction.user.mention} for hitting **{res['current_streak']} days**!",
+                    embed=milestone_embed
+                )
+                print(f"Public milestone celebration posted for {username} ({res['current_streak']} days).")
     except Exception as e:
         await interaction.followup.send(f"⚠️ Error logging completion: {e}", ephemeral=True)
 
@@ -233,12 +301,13 @@ async def send_morning_announcement_job():
 
         problem = await fetch_leetcode_daily(bot.session)
         embed = create_problem_embed(problem)
-        quote = get_random_quote()
+        title = get_morning_title()
+        quote = get_morning_quote()
 
         active = get_active_participants()
         pings = build_participant_pings(active) if active else ""
 
-        message_content = f"{pings} 🚀 **Daily LeetCode Challenge is Live!**\n> *\"{quote}\"*"
+        message_content = f"{pings} **{title}**\n> *\"{quote}\"*"
         msg = await channel.send(content=message_content, embed=embed, view=SolvedButtonView())
 
         # Save to database with post_type='announcement'
@@ -267,11 +336,13 @@ async def send_afternoon_checkin_job():
         # Case 1: 100% Completed
         if not pending:
             completed_pings = build_participant_pings(completed)
+            sweep_title = get_server_sweep_title()
+            sweep_desc = get_server_sweep_desc()
             embed = discord.Embed(
-                title="🎉 1:00 PM Check-In: All Done!",
+                title=sweep_title,
                 description=(
-                    f"Incredible! All participants have already completed today's problem: "
-                    f"**[{problem['title']}]({problem['url']})**! 🚀\n\n"
+                    f"{sweep_desc}\n\n"
+                    f"Today's problem: **[{problem['title']}]({problem['url']})** 🚀\n"
                     f"No pending reminders needed. Enjoy your bonus practice challenges below!"
                 ),
                 color=discord.Color.green()
@@ -283,11 +354,13 @@ async def send_afternoon_checkin_job():
 
         # Case 2: Mixed or Pending
         pending_pings = build_participant_pings(pending)
+        title = get_midday_title()
+        quote = get_midday_quote()
         embed = discord.Embed(
-            title="⏰ 1:00 PM Midday Check-In",
+            title=title,
             description=(
                 f"Today's problem: **[{problem['title']}]({problem['url']})** ({problem['difficulty']})\n\n"
-                f"Half the day has passed! Don't let your streak slip away."
+                f"> *\"{quote}\"*"
             ),
             color=discord.Color.gold()
         )
@@ -337,9 +410,12 @@ async def send_evening_checkin_job():
         # Case 1: 100% Completed
         if not pending:
             completed_pings = build_participant_pings(completed)
+            sweep_title = get_server_sweep_title()
+            sweep_desc = get_server_sweep_desc()
             embed = discord.Embed(
-                title="🌟 8:30 PM Final Check-In: 100% Completed!",
+                title=sweep_title,
                 description=(
+                    f"{sweep_desc}\n\n"
                     f"Every participant conquered today's challenge: "
                     f"**[{problem['title']}]({problem['url']})**!\n\n"
                     f"All streaks are safe and accounted for. Great job team! 🔥"
@@ -353,11 +429,13 @@ async def send_evening_checkin_job():
 
         # Case 2: Mixed or Pending
         pending_pings = build_participant_pings(pending)
+        title = get_evening_title()
+        quote = get_evening_quote()
         embed = discord.Embed(
-            title="🌙 8:30 PM Evening Reminder — Reset Approaching!",
+            title=title,
             description=(
                 f"**[{problem['title']}]({problem['url']})** ({problem['difficulty']})\n\n"
-                f"Only ~3.5 hours remaining before midnight! Take 20 minutes to solve it and keep your streak alive! 💪"
+                f"> *\"{quote}\"*"
             ),
             color=discord.Color.red()
         )
@@ -389,6 +467,55 @@ async def send_evening_checkin_job():
         print(f"Failed to send 8:30 PM reminder: {e}")
 
 
+async def send_sunday_champion_job():
+    """Sunday 11:00 AM IST: Showcases and congratulates the #1 streak champion of the week."""
+    channel = bot.get_channel(CHANNEL_ID)
+    if not channel:
+        return
+    try:
+        leaders = get_top_streaks(limit=1)
+        if not leaders:
+            return
+        champion = leaders[0]
+        streak = champion["current_streak"]
+        if streak <= 0:
+            return
+
+        title = get_sunday_champion_title()
+        desc_intro = get_sunday_champion_desc()
+
+        embed = discord.Embed(
+            title=title,
+            description=(
+                f"{desc_intro}\n\n"
+                f"👑 **Weekly Champion:** **{champion['username']}**\n"
+                f"🔥 Active Streak: **{champion['current_streak']} days**\n"
+                f"🏆 Highest Recorded Streak: **{champion['highest_streak']} days**\n"
+                f"📚 Lifetime Problems Solved: **{champion['total_solved']} problems**\n\n"
+                f"Give it up for our algorithm champion! Can anyone dethrone them next week?"
+            ),
+            color=discord.Color.gold(),
+            timestamp=datetime.now()
+        )
+        embed.set_footer(text="Sunday Weekly Spotlight • LeetCode Daily Arena")
+        content = f"🏆👑 **Sunday Algorithmic Champion Spotlight!** All hail **{champion['username']}**!"
+        await channel.send(content=content, embed=embed)
+        print(f"Sunday champion spotlight posted for {champion['username']} (streak: {streak}).")
+    except Exception as e:
+        print(f"Failed to post Sunday champion spotlight: {e}")
+
+
+async def prune_expired_participants_job():
+    """Daily midnight maintenance: permanently deletes data for members who left > 60 days ago."""
+    try:
+        pruned = prune_expired_inactive_participants(days=60)
+        if pruned:
+            pruned_names = ", ".join([p["username"] for p in pruned])
+            print(f"Pruned {len(pruned)} expired participants (> 60 days inactive): {pruned_names}")
+    except Exception as e:
+        print(f"Error during expired participant pruning: {e}")
+
+
 # ==========================================
 # DISCORD EVENTS
 # ==========================================
@@ -396,13 +523,14 @@ async def send_evening_checkin_job():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name} ({bot.user.id})")
+    # Clear guild-level duplicate commands so Discord shows each command only once (from global sync)
     for guild in bot.guilds:
         try:
-            bot.tree.copy_global_to(guild=guild)
+            bot.tree.clear_commands(guild=guild)
             await bot.tree.sync(guild=guild)
-            print(f"Synced slash commands instantly to guild '{guild.name}' ({guild.id}).")
+            print(f"Cleared guild-specific commands for '{guild.name}' ({guild.id}) to eliminate duplicate command listings.")
         except Exception as e:
-            print(f"Warning syncing slash commands to guild '{guild.name}': {e}")
+            print(f"Warning clearing guild commands for '{guild.name}': {e}")
 
 
 @bot.event
@@ -487,13 +615,14 @@ async def execute_trigger(
         if not already_announced:
             problem = await fetch_leetcode_daily(bot.session)
             embed = create_problem_embed(problem)
-            quote = get_random_quote()
+            title = get_morning_title()
+            quote = get_trigger_quote()
 
             active = get_active_participants()
             pings = build_participant_pings(active) if active else ""
 
             message_content = (
-                f"{pings} 🚀 **Daily LeetCode Challenge is Live!** (Triggered by {invoker_mention})\n"
+                f"{pings} **{title}** (Triggered by {invoker_mention})\n"
                 f"> *\"{quote}\"*"
             )
             if interaction:
@@ -612,7 +741,8 @@ def build_help_embed() -> discord.Embed:
         value=(
             f"• **8:00 AM** (`{MORNING_HOUR:02d}:{MORNING_MINUTE:02d}`) — Daily challenge announcement (pings active participants)\n"
             f"• **1:00 PM** (`{AFTERNOON_HOUR:02d}:{AFTERNOON_MINUTE:02d}`) — Midday check-in (**only pings members who haven't completed**)\n"
-            f"• **8:30 PM** (`{EVENING_HOUR:02d}:{EVENING_MINUTE:02d}`) — Evening reminder (**only pings members who haven't completed**)"
+            f"• **8:30 PM** (`{EVENING_HOUR:02d}:{EVENING_MINUTE:02d}`) — Evening reminder (**only pings members who haven't completed**)\n"
+            f"• **Sunday 11:00 AM** — Weekly Champion Spotlight crowning the #1 streak leader!"
         ),
         inline=False
     )
@@ -626,7 +756,8 @@ def build_help_embed() -> discord.Embed:
             "   • Solve before 1:00 PM ➔ **Zero pings** at 1:00 PM & 8:30 PM.\n"
             "   • Solve at or after 1:00 PM ➔ **Zero pings** at 8:30 PM.\n"
             "   • Only members who still haven't solved get pinged in reminders!\n"
-            "4. **Automatic Participation**: Solving via button, reaction, or `/solved` automatically enrolls you as an active participant."
+            "4. **Public Milestone Shoutouts**: When you conquer landmark streaks of **7, 28, 56, and monthly marks (30, 60, 90... days)**, the server celebrates your achievement publicly!\n"
+            "5. **60-Day Data Retention**: If you `/leave`, your streak history is preserved for 60 days before deletion."
         ),
         inline=False
     )
@@ -684,8 +815,7 @@ async def slash_daily(interaction: discord.Interaction):
     try:
         problem = await fetch_leetcode_daily(bot.session)
         embed = create_problem_embed(problem)
-        quote = get_random_quote()
-        await interaction.followup.send(content=f"> *\"{quote}\"*", embed=embed)
+        await interaction.followup.send(embed=embed)
     except Exception as e:
         await interaction.followup.send(f"⚠️ Error fetching today's daily problem: {e}")
 
@@ -863,8 +993,7 @@ async def prefix_daily(ctx):
     try:
         problem = await fetch_leetcode_daily(bot.session)
         embed = create_problem_embed(problem)
-        quote = get_random_quote()
-        await ctx.send(content=f"> *\"{quote}\"*", embed=embed)
+        await ctx.send(embed=embed)
     except Exception as e:
         await ctx.send(f"⚠️ Error: {e}")
 
@@ -888,6 +1017,29 @@ async def prefix_solved(ctx):
         await ctx.send(
             f"🏆 {ctx.author.mention}, marked as solved! Streak: 🔥 **{res['current_streak']} days**! *(Tip: Use `/solved` or click the **Mark Solved ✅** button on the post for a 100% private popup)*",
             delete_after=6
+        )
+
+    # Check for milestone celebration
+    milestone = res.get("milestone")
+    if milestone:
+        badge = milestone.get("badge", "🎉")
+        m_title = milestone.get("title", f"{res['current_streak']}-Day Streak Milestone!")
+        m_desc = milestone.get("desc", "Incredible persistence and dedication!")
+        milestone_embed = discord.Embed(
+            title=f"{badge} {m_title}",
+            description=(
+                f"Huge milestone reached! Let's celebrate {ctx.author.mention} for achieving "
+                f"an unbroken streak of **{res['current_streak']} days**! 🔥\n\n"
+                f"{m_desc}\n\n"
+                f"🏆 Highest Streak: **{res['highest_streak']} days** | 📚 Total Solved: **{res['total_solved']} problems**"
+            ),
+            color=discord.Color.gold(),
+            timestamp=datetime.now()
+        )
+        milestone_embed.set_footer(text="LeetCode Milestone Celebration • Keep the streak alive!")
+        await ctx.send(
+            content=f"🎉 **MILESTONE ALERT!** Shoutout to {ctx.author.mention} for hitting **{res['current_streak']} days**!",
+            embed=milestone_embed
         )
 
 

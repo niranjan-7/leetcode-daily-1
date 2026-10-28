@@ -3,6 +3,8 @@ import sqlite3
 from datetime import date, datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 
+from phrases import check_milestone
+
 DEFAULT_DB_PATH = os.path.join(os.path.dirname(__file__), "data", "bot.db")
 
 # Initial seeded participants: shanks (Niranjan), Praveen, VICHU
@@ -93,10 +95,18 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 user_id INTEGER PRIMARY KEY,
                 username TEXT NOT NULL,
                 joined_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                active INTEGER NOT NULL DEFAULT 1
+                active INTEGER NOT NULL DEFAULT 1,
+                left_at TIMESTAMP DEFAULT NULL
             );
             """
         )
+
+        # Migration: ensure left_at column exists in participants if upgrading
+        cursor.execute("PRAGMA table_info(participants);")
+        part_cols = [row["name"] for row in cursor.fetchall()]
+        if "left_at" not in part_cols:
+            cursor.execute("ALTER TABLE participants ADD COLUMN left_at TIMESTAMP DEFAULT NULL;")
+
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS bonus_problems (
@@ -126,9 +136,9 @@ def add_participant(user_id: int, username: str, db_path: str = DEFAULT_DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO participants (user_id, username, active)
-            VALUES (?, ?, 1)
-            ON CONFLICT(user_id) DO UPDATE SET active = 1, username = excluded.username
+            INSERT INTO participants (user_id, username, active, left_at)
+            VALUES (?, ?, 1, NULL)
+            ON CONFLICT(user_id) DO UPDATE SET active = 1, left_at = NULL, username = excluded.username
             """,
             (user_id, username)
         )
@@ -137,12 +147,41 @@ def add_participant(user_id: int, username: str, db_path: str = DEFAULT_DB_PATH)
 
 
 def remove_participant(user_id: int, db_path: str = DEFAULT_DB_PATH) -> bool:
-    """Deactivates a member from participation (opt-out from reminders)."""
+    """Deactivates a member from participation and marks left_at timestamp (retained for 60 days)."""
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE participants SET active = 0 WHERE user_id = ?", (user_id,))
+        cursor.execute(
+            "UPDATE participants SET active = 0, left_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+            (user_id,)
+        )
         conn.commit()
         return cursor.rowcount > 0
+
+
+def prune_expired_inactive_participants(days: int = 60, db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
+    """
+    Finds participants who left more than `days` ago (default 60 days / 2 months)
+    and permanently removes their records from completions, users, and participants.
+    """
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT user_id, username, left_at
+            FROM participants
+            WHERE active = 0 AND left_at IS NOT NULL AND left_at <= datetime('now', '-{days} days')
+            """
+        )
+        expired_users = [dict(row) for row in cursor.fetchall()]
+
+        for u in expired_users:
+            uid = u["user_id"]
+            cursor.execute("DELETE FROM completions WHERE user_id = ?", (uid,))
+            cursor.execute("DELETE FROM users WHERE user_id = ?", (uid,))
+            cursor.execute("DELETE FROM participants WHERE user_id = ?", (uid,))
+
+        conn.commit()
+        return expired_users
 
 
 def get_active_participants(db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
@@ -261,12 +300,14 @@ def record_completion(
         )
         conn.commit()
 
+        milestone = check_milestone(current_streak)
         return {
             "success": True,
             "reason": "completed",
             "current_streak": current_streak,
             "highest_streak": highest_streak,
-            "total_solved": total_solved
+            "total_solved": total_solved,
+            "milestone": milestone
         }
 
 

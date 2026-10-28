@@ -14,6 +14,17 @@ An asynchronous, intelligent Discord bot that posts daily LeetCode challenges, p
   - Your completion confirmation, updated streak, and 4-problem bonus practice track are displayed in a **100% private ephemeral message** (`Only you can see this • Dismiss message`) so your solutions and stats never clutter the public channel.
   - Clicking the **`✅`** emoji reaction also quietly logs completion in SQLite without sending any public channel messages.
   - Automatically advances streaks, logs personal bests, and tracks total solved problems.
+- **🎉 Public Milestone Celebrations**:
+  - While regular daily solves remain completely private, major landmark streaks trigger a public celebration in the channel tagging the solver!
+  - Celebrates landmark streaks: **7 Days** (1 Week), **28 Days** (4 Weeks), **56 Days** (8 Weeks), and all monthly multiples (**30, 60, 90, 100, 180, 365 Days**).
+- **👑 Weekly Sunday Champion Spotlight (11:00 AM IST)**:
+  - Every Sunday at 11:00 AM IST, the bot crowns and showcases the server's #1 streak leader with stats and achievements.
+- **🛡️ 60-Day Data Retention Policy**:
+  - If a member uses `/leave`, their solved history and streak data are preserved for 60 days (2 months).
+  - Rejoining via `/join` or `/solved` within 60 days restores full history seamlessly; after 60 days of inactivity, expired records are permanently pruned.
+- **💬 Dynamic Rotating Phrases & Quotes**:
+  - Dynamic rotational phrases and quotes across morning announcements, midday check-ins, evening reminders, solves, and 100% team sweeps.
+  - Motivational quotes are exclusively reserved for announcements and check-ins, keeping `/daily` problem specifications clean and focused.
 - **⏰ 3-Stage Smart Reminders with Cascading Exemptions (IST)**:
   - **8:00 AM IST**: Daily challenge announcement (only pings enrolled participants).
   - **1:00 PM IST**: Midday check-in (**only pings members who haven't completed yet**; members who solved earlier are completely exempt from pings).
