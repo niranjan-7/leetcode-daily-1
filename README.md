@@ -22,6 +22,11 @@ An asynchronous, intelligent Discord bot that posts daily LeetCode challenges, p
   - **Between 5:30 AM and 8:00 AM IST**: Posts the official daily announcement early and automatically skips the scheduled 8:00 AM post to prevent duplicates.
   - **After 8:00 AM IST**: Evaluates the live completion status and sends an on-demand check-in pinging **only** pending members.
   - Does not alter or cancel the independent 1:00 PM or 8:30 PM scheduled check-ins.
+- **📚 Curated Bonus Practice Track (2 Easy, 1 Medium, 1 Hard)**:
+  - Dynamically queries LeetCode for 4 similar free practice problems matching today's primary topic.
+  - Cached daily in SQLite (`bonus_problems`) for zero latency.
+  - Delivered immediately to the solver upon completing the daily challenge.
+  - Highlighted in check-in and trigger posts tagging **only completed solvers** near the practice challenge set.
 - **👥 Dynamic Participant Enrollment**:
   - Automatically registers new members who react `✅` or run `/solved`.
   - Manual enrollment via `/join` and `/leave`.
@@ -34,6 +39,7 @@ An asynchronous, intelligent Discord bot that posts daily LeetCode challenges, p
 | Command | Description |
 | :--- | :--- |
 | `/daily` | View today's active LeetCode daily challenge embed. |
+| `/practice` | View today's curated 4 similar practice problems (2 Easy, 1 Medium, 1 Hard). |
 | `/trigger` | Post daily challenge early (5:30–8:00 AM, skips 8 AM post) OR on-demand check-in pinging only pending members (after 8 AM). |
 | `/hint [num]` | Reveal a spoiler-masked hint privately for today's challenge. |
 | `/solved` | Manually mark today's problem as solved and view your streak. |

@@ -97,6 +97,16 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             );
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS bonus_problems (
+                challenge_date TEXT PRIMARY KEY,
+                topic_name TEXT NOT NULL,
+                problems_json TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """
+        )
 
         # Seed initial participants if empty
         cursor.execute("SELECT COUNT(*) as count FROM participants")
@@ -342,3 +352,40 @@ def get_daily_post_date(message_id: int, db_path: str = DEFAULT_DB_PATH) -> Opti
         if row:
             return row["challenge_date"]
         return None
+
+
+def get_cached_bonus_problems(challenge_date: str, db_path: str = DEFAULT_DB_PATH) -> Optional[Dict[str, Any]]:
+    """Retrieves cached 4-problem bonus set for a given challenge date if available."""
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT topic_name, problems_json FROM bonus_problems WHERE challenge_date = ?",
+            (challenge_date,)
+        )
+        row = cursor.fetchone()
+        if row:
+            import json
+            data = json.loads(row["problems_json"])
+            data["topic_name"] = row["topic_name"]
+            return data
+        return None
+
+
+def save_cached_bonus_problems(
+    challenge_date: str,
+    topic_name: str,
+    problems_data: Dict[str, Any],
+    db_path: str = DEFAULT_DB_PATH
+) -> None:
+    """Caches the 4-problem bonus set for a given challenge date."""
+    import json
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT OR REPLACE INTO bonus_problems (challenge_date, topic_name, problems_json, created_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            (challenge_date, topic_name, json.dumps(problems_data))
+        )
+        conn.commit()

@@ -141,6 +141,7 @@ async def fetch_leetcode_daily(session: Optional[aiohttp.ClientSession] = None) 
                 hints
                 topicTags {
                     name
+                    slug
                 }
             }
         }
@@ -162,7 +163,9 @@ async def fetch_leetcode_daily(session: Optional[aiohttp.ClientSession] = None) 
 
     challenge = data["data"]["activeDailyCodingChallengeQuestion"]
     question = challenge["question"]
-    tags = [t["name"] for t in question.get("topicTags", [])]
+    topic_tags = question.get("topicTags", [])
+    tags = [t["name"] for t in topic_tags]
+    tag_slugs = [t.get("slug", "") for t in topic_tags if t.get("slug")]
     raw_hints = question.get("hints", [])
     cleaned_hints = [clean_html_text(h) for h in raw_hints if h]
 
@@ -172,10 +175,144 @@ async def fetch_leetcode_daily(session: Optional[aiohttp.ClientSession] = None) 
         "difficulty": question["difficulty"],
         "url": f"https://leetcode.com{challenge['link']}",
         "tags": ", ".join(tags) if tags else "None",
+        "primary_tag": tags[0] if tags else "Algorithms",
+        "primary_tag_slug": tag_slugs[0] if tag_slugs else "algorithms",
         "ac_rate": round(question.get("acRate", 0), 1),
         "hints": cleaned_hints,
         "date": challenge["date"]
     }
+
+
+async def fetch_bonus_practice_problems(
+    session: aiohttp.ClientSession,
+    topic_slug: str,
+    topic_name: str,
+    exclude_id: str = ""
+) -> Dict[str, Any]:
+    """
+    Fetches a curated 4-problem practice set: 2 Easy, 1 Medium, 1 Hard
+    matching the given topic tag, excluding paid-only problems and today's daily problem.
+    """
+    query = """
+    query problemsetQuestionList($categorySlug: String, $limit: Int, $filters: QuestionListFilterInput) {
+        problemsetQuestionList: questionList(categorySlug: $categorySlug, limit: $limit, filters: $filters) {
+            questions: data {
+                questionFrontendId
+                title
+                titleSlug
+                difficulty
+                acRate
+                isPaidOnly
+            }
+        }
+    }
+    """
+
+    async def _query_diff(slug: str, diff_str: str) -> List[Dict[str, Any]]:
+        variables = {
+            "categorySlug": "algorithms",
+            "limit": 20,
+            "filters": {"tags": [slug] if slug else [], "difficulty": diff_str}
+        }
+        try:
+            async with session.post(
+                LEETCODE_URL,
+                json={"query": query, "variables": variables},
+                headers=HEADERS,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                resp.raise_for_status()
+                res = await resp.json()
+                raw_list = res.get("data", {}).get("problemsetQuestionList", {}).get("questions", [])
+                free = [
+                    {
+                        "id": q["questionFrontendId"],
+                        "title": q["title"],
+                        "url": f"https://leetcode.com/problems/{q['titleSlug']}/",
+                        "difficulty": q["difficulty"],
+                        "ac_rate": round(q.get("acRate", 0), 1)
+                    }
+                    for q in raw_list
+                    if not q.get("isPaidOnly") and str(q.get("questionFrontendId")) != str(exclude_id)
+                ]
+                return free
+        except Exception as e:
+            print(f"Error fetching practice diff {diff_str}: {e}")
+            return []
+
+    # 1. Fetch candidates for Easy, Medium, Hard
+    easy_candidates = await _query_diff(topic_slug, "EASY")
+    if len(easy_candidates) < 2:
+        fallback_easy = await _query_diff("", "EASY")
+        for q in fallback_easy:
+            if q not in easy_candidates and str(q["id"]) != str(exclude_id):
+                easy_candidates.append(q)
+
+    med_candidates = await _query_diff(topic_slug, "MEDIUM")
+    if not med_candidates:
+        fallback_med = await _query_diff("", "MEDIUM")
+        for q in fallback_med:
+            if str(q["id"]) != str(exclude_id):
+                med_candidates.append(q)
+
+    hard_candidates = await _query_diff(topic_slug, "HARD")
+    if not hard_candidates:
+        fallback_hard = await _query_diff("", "HARD")
+        for q in fallback_hard:
+            if str(q["id"]) != str(exclude_id):
+                hard_candidates.append(q)
+
+    # 2. Randomly sample 2 Easy, 1 Medium, 1 Hard
+    selected_easy = random.sample(easy_candidates, min(2, len(easy_candidates))) if easy_candidates else []
+    selected_medium = random.sample(med_candidates, min(1, len(med_candidates))) if med_candidates else []
+    selected_hard = random.sample(hard_candidates, min(1, len(hard_candidates))) if hard_candidates else []
+
+    return {
+        "topic_name": topic_name,
+        "easy": selected_easy,
+        "medium": selected_medium,
+        "hard": selected_hard
+    }
+
+
+def create_practice_embed(practice_data: Dict[str, Any]) -> discord.Embed:
+    topic_name = practice_data.get("topic_name", "Algorithms")
+    embed = discord.Embed(
+        title=f"🎯 Bonus Practice Track: {topic_name}",
+        description=(
+            f"Conquered today's challenge? Level up your **{topic_name}** skills "
+            f"with today's 4 curated practice problems:"
+        ),
+        color=discord.Color.teal(),
+        timestamp=datetime.now(timezone.utc)
+    )
+
+    easy_problems = practice_data.get("easy", [])
+    if easy_problems:
+        lines = [
+            f"• [#{p['id']}. {p['title']}]({p['url']}) — 📊 `{p['ac_rate']}%`"
+            for p in easy_problems
+        ]
+        embed.add_field(name="🟢 Easy (2 Challenges)", value="\n".join(lines), inline=False)
+
+    med_problems = practice_data.get("medium", [])
+    if med_problems:
+        lines = [
+            f"• [#{p['id']}. {p['title']}]({p['url']}) — 📊 `{p['ac_rate']}%`"
+            for p in med_problems
+        ]
+        embed.add_field(name="🟡 Medium (1 Challenge)", value="\n".join(lines), inline=False)
+
+    hard_problems = practice_data.get("hard", [])
+    if hard_problems:
+        lines = [
+            f"• [#{p['id']}. {p['title']}]({p['url']}) — 📊 `{p['ac_rate']}%`"
+            for p in hard_problems
+        ]
+        embed.add_field(name="🔴 Hard (1 Challenge)", value="\n".join(lines), inline=False)
+
+    embed.set_footer(text="Solve at your own pace! Consistency is the path to mastery.")
+    return embed
 
 
 def get_random_quote() -> str:

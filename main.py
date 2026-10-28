@@ -23,12 +23,16 @@ from database import (
     remove_participant,
     get_active_participants,
     get_challenge_status,
-    is_announcement_posted_today
+    is_announcement_posted_today,
+    get_cached_bonus_problems,
+    save_cached_bonus_problems
 )
 from leetcode import (
     fetch_leetcode_daily,
     create_problem_embed,
-    get_random_quote
+    get_random_quote,
+    fetch_bonus_practice_problems,
+    create_practice_embed
 )
 
 # Load environment configuration
@@ -128,6 +132,27 @@ def build_participant_pings(participants: List[Dict[str, Any]]) -> str:
     return " ".join([f"<@{p['user_id']}>" for p in participants])
 
 
+async def get_or_fetch_bonus_problems(problem: Dict[str, Any]) -> Dict[str, Any]:
+    """Retrieves cached 4-problem bonus set or fetches and caches it if not yet generated."""
+    date_str = problem.get("date", get_current_date_str())
+    cached = get_cached_bonus_problems(date_str)
+    if cached:
+        return cached
+
+    primary_slug = problem.get("primary_tag_slug", "algorithms")
+    primary_name = problem.get("primary_tag", "Algorithms")
+    exclude_id = problem.get("id", "")
+
+    practice_data = await fetch_bonus_practice_problems(
+        bot.session,
+        primary_slug,
+        primary_name,
+        exclude_id=exclude_id
+    )
+    save_cached_bonus_problems(date_str, primary_name, practice_data)
+    return practice_data
+
+
 # ==========================================
 # SCHEDULED JOBS
 # ==========================================
@@ -164,7 +189,7 @@ async def send_morning_announcement_job():
 
 
 async def send_afternoon_checkin_job():
-    """1:00 PM IST: Checks who completed and only pings members who have NOT completed."""
+    """1:00 PM IST: Checks who completed, pings pending members, and tags completed solvers with bonus practice problems."""
     channel = bot.get_channel(CHANNEL_ID)
     if not channel:
         return
@@ -175,23 +200,27 @@ async def send_afternoon_checkin_job():
         pending = status["pending"]
 
         problem = await fetch_leetcode_daily(bot.session)
+        practice_data = await get_or_fetch_bonus_problems(problem)
+        practice_embed = create_practice_embed(practice_data)
 
-        # If everyone has completed it:
+        # Case 1: 100% Completed
         if not pending:
+            completed_pings = build_participant_pings(completed)
             embed = discord.Embed(
                 title="🎉 1:00 PM Check-In: All Done!",
                 description=(
                     f"Incredible! All participants have already completed today's problem: "
                     f"**[{problem['title']}]({problem['url']})**! 🚀\n\n"
-                    f"No pending reminders needed. Enjoy the rest of your day!"
+                    f"No pending reminders needed. Enjoy your bonus practice challenges below!"
                 ),
                 color=discord.Color.green()
             )
-            await channel.send(embed=embed)
+            content = f"{completed_pings} 🌟 **100% Completed!** All participants conquered today's challenge!"
+            await channel.send(content=content, embeds=[embed, practice_embed])
             print(f"1:00 PM check-in: 100% completed ({len(completed)} solvers).")
             return
 
-        # Pings ONLY the pending participants
+        # Case 2: Mixed or Pending
         pending_pings = build_participant_pings(pending)
         embed = discord.Embed(
             title="⏰ 1:00 PM Midday Check-In",
@@ -210,17 +239,28 @@ async def send_afternoon_checkin_job():
         embed.add_field(name="Still Pending ⏳", value=pending_names, inline=False)
         embed.set_footer(text="React with ✅ on this post or use /solved to continue your streak and prevent 8:30 PM pings!")
 
-        content = f"{pending_pings} ⏰ **1:00 PM Check-In!** Today's LeetCode challenge is waiting for you."
-        msg = await channel.send(content=content, embed=embed)
+        if completed:
+            completed_pings = build_participant_pings(completed)
+            content = (
+                f"{pending_pings} ⏰ **1:00 PM Check-In!** Today's LeetCode challenge is waiting for you.\n\n"
+                f"{completed_pings} 🎯 **Next Level Practice:** You already conquered today's challenge! "
+                f"Level up with today's 4 bonus challenges below:"
+            )
+            embeds = [embed, practice_embed]
+        else:
+            content = f"{pending_pings} ⏰ **1:00 PM Check-In!** Today's LeetCode challenge is waiting for you."
+            embeds = [embed]
+
+        msg = await channel.send(content=content, embeds=embeds)
         await msg.add_reaction("✅")
         save_daily_post(today_date, msg.id, channel.id, post_type="checkin")
-        print(f"1:00 PM check-in posted: {len(pending)} pending members pinged (msg_id: {msg.id}).")
+        print(f"1:00 PM check-in posted: {len(pending)} pending, {len(completed)} completed (msg_id: {msg.id}).")
     except Exception as e:
         print(f"Failed to send 1:00 PM check-in: {e}")
 
 
 async def send_evening_checkin_job():
-    """8:30 PM IST: Evening check-in pinging ONLY remaining pending members."""
+    """8:30 PM IST: Evening reminder pinging remaining pending members and tagging completed solvers."""
     channel = bot.get_channel(CHANNEL_ID)
     if not channel:
         return
@@ -231,9 +271,12 @@ async def send_evening_checkin_job():
         pending = status["pending"]
 
         problem = await fetch_leetcode_daily(bot.session)
+        practice_data = await get_or_fetch_bonus_problems(problem)
+        practice_embed = create_practice_embed(practice_data)
 
-        # If everyone has completed it:
+        # Case 1: 100% Completed
         if not pending:
+            completed_pings = build_participant_pings(completed)
             embed = discord.Embed(
                 title="🌟 8:30 PM Final Check-In: 100% Completed!",
                 description=(
@@ -243,11 +286,12 @@ async def send_evening_checkin_job():
                 ),
                 color=discord.Color.green()
             )
-            await channel.send(embed=embed)
+            content = f"{completed_pings} 🌟 **100% Completed!** Every participant kept their streak intact today!"
+            await channel.send(content=content, embeds=[embed, practice_embed])
             print("8:30 PM check-in: 100% completed.")
             return
 
-        # Pings ONLY the pending participants
+        # Case 2: Mixed or Pending
         pending_pings = build_participant_pings(pending)
         embed = discord.Embed(
             title="🌙 8:30 PM Evening Reminder — Reset Approaching!",
@@ -266,11 +310,22 @@ async def send_evening_checkin_job():
         embed.add_field(name="Action Required ⚠️", value=pending_names, inline=False)
         embed.set_footer(text="React with ✅ on this post or run /solved now to save your streak!")
 
-        content = f"{pending_pings} 🌙 **8:30 PM Reminder!** Keep your daily streak alive before the reset!"
-        msg = await channel.send(content=content, embed=embed)
+        if completed:
+            completed_pings = build_participant_pings(completed)
+            content = (
+                f"{pending_pings} 🌙 **8:30 PM Reminder!** Keep your daily streak alive before the reset!\n\n"
+                f"{completed_pings} 🎯 **Bonus Practice:** High-five for finishing today's challenge! "
+                f"Check out today's bonus problem track below:"
+            )
+            embeds = [embed, practice_embed]
+        else:
+            content = f"{pending_pings} 🌙 **8:30 PM Reminder!** Keep your daily streak alive before the reset!"
+            embeds = [embed]
+
+        msg = await channel.send(content=content, embeds=embeds)
         await msg.add_reaction("✅")
         save_daily_post(today_date, msg.id, channel.id, post_type="checkin")
-        print(f"8:30 PM reminder posted: {len(pending)} pending members pinged (msg_id: {msg.id}).")
+        print(f"8:30 PM reminder posted: {len(pending)} pending, {len(completed)} completed (msg_id: {msg.id}).")
     except Exception as e:
         print(f"Failed to send 8:30 PM reminder: {e}")
 
@@ -311,10 +366,22 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     channel = bot.get_channel(payload.channel_id)
     if channel:
         if result["success"]:
-            msg = await channel.send(
-                f"🔥 **{username}** completed challenge `{challenge_date}`! Current streak: **{result['current_streak']} days**! 🎉 (You won't be pinged in check-ins today)",
-                delete_after=20
-            )
+            try:
+                problem = await fetch_leetcode_daily(bot.session)
+                practice_data = await get_or_fetch_bonus_problems(problem)
+                practice_embed = create_practice_embed(practice_data)
+                await channel.send(
+                    f"🔥 **{username}** completed challenge `{challenge_date}`! Current streak: **{result['current_streak']} days**! 🎉\n"
+                    f"Here is your personal 4-problem practice set on **{practice_data['topic_name']}** to keep grinding:",
+                    embed=practice_embed,
+                    delete_after=180
+                )
+            except Exception as e:
+                print(f"Error sending reaction practice set: {e}")
+                await channel.send(
+                    f"🔥 **{username}** completed challenge `{challenge_date}`! Current streak: **{result['current_streak']} days**! 🎉",
+                    delete_after=20
+                )
 
 
 # ==========================================
@@ -377,8 +444,11 @@ async def execute_trigger(
     completed = status["completed"]
     pending = status["pending"]
     problem = await fetch_leetcode_daily(bot.session)
+    practice_data = await get_or_fetch_bonus_problems(problem)
+    practice_embed = create_practice_embed(practice_data)
 
     if not pending:
+        completed_pings = build_participant_pings(completed)
         embed = discord.Embed(
             title="🌟 On-Demand Status: 100% Completed!",
             description=(
@@ -389,10 +459,11 @@ async def execute_trigger(
             ),
             color=discord.Color.green()
         )
+        content = f"{completed_pings} 🌟 **100% Completed!** Here is today's bonus practice track:"
         if interaction:
-            await interaction.followup.send(embed=embed)
+            await interaction.followup.send(content=content, embeds=[embed, practice_embed])
         else:
-            await channel.send(embed=embed)
+            await channel.send(content=content, embeds=[embed, practice_embed])
         return
 
     pending_pings = build_participant_pings(pending)
@@ -414,14 +485,25 @@ async def execute_trigger(
     embed.add_field(name="Still Pending ⏳", value=pending_names, inline=False)
     embed.set_footer(text="React with ✅ on this post or use /solved to continue your streak and prevent reminders!")
 
-    content = f"{pending_pings} ⏰ **LeetCode Check-In!** Today's problem is still waiting for you."
-    msg = await channel.send(content=content, embed=embed)
+    if completed:
+        completed_pings = build_participant_pings(completed)
+        content = (
+            f"{pending_pings} ⏰ **LeetCode Check-In!** Today's problem is still waiting for you.\n\n"
+            f"{completed_pings} 🎯 **Next Level Practice:** You already conquered today's challenge! "
+            f"Try today's 4 bonus challenges below:"
+        )
+        embeds = [embed, practice_embed]
+    else:
+        content = f"{pending_pings} ⏰ **LeetCode Check-In!** Today's problem is still waiting for you."
+        embeds = [embed]
+
+    msg = await channel.send(content=content, embeds=embeds)
     await msg.add_reaction("✅")
     save_daily_post(today_date, msg.id, channel.id, post_type="checkin")
 
     if interaction:
-        await interaction.followup.send("✅ Check-in dispatched! Pinged only the pending participants.", ephemeral=True)
-    print(f"On-demand check-in trigger dispatched: {len(pending)} pending members pinged.")
+        await interaction.followup.send("✅ Check-in dispatched! Pinged pending members and tagged completed solvers.", ephemeral=True)
+    print(f"On-demand check-in trigger dispatched: {len(pending)} pending, {len(completed)} completed.")
 
 
 # ==========================================
@@ -465,6 +547,7 @@ def build_help_embed() -> discord.Embed:
         name="⚡ Available Commands",
         value=(
             "• `/daily` — View today's active challenge & stats\n"
+            "• `/practice` — View today's 4 similar practice problems (2 Easy, 1 Medium, 1 Hard)\n"
             "• `/trigger` — Smart trigger: posts challenge early (5:30–8:00 AM, skips 8 AM cron) OR on-demand check-in pinging only pending members (after 8 AM)\n"
             "• `/hint [num]` — Reveal progressive hints privately with spoiler tags (`||hint||`)\n"
             "• `/solved` — Mark today's challenge as solved & update streak\n"
@@ -501,6 +584,18 @@ async def slash_daily(interaction: discord.Interaction):
         await interaction.followup.send(content=f"> *\"{quote}\"*", embed=embed)
     except Exception as e:
         await interaction.followup.send(f"⚠️ Error fetching today's daily problem: {e}", ephemeral=True)
+
+
+@bot.tree.command(name="practice", description="View today's curated 4 similar practice problems (2 Easy, 1 Medium, 1 Hard)")
+async def slash_practice(interaction: discord.Interaction):
+    await interaction.response.defer()
+    try:
+        problem = await fetch_leetcode_daily(bot.session)
+        practice_data = await get_or_fetch_bonus_problems(problem)
+        embed = create_practice_embed(practice_data)
+        await interaction.followup.send(embed=embed)
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ Error fetching practice problems: {e}", ephemeral=True)
 
 
 @bot.tree.command(name="hint", description="Reveal a spoiler-safe hint for today's challenge")
@@ -542,6 +637,10 @@ async def slash_solved(interaction: discord.Interaction):
         username = interaction.user.display_name
         res = record_completion(interaction.user.id, username, today_date)
 
+        problem = await fetch_leetcode_daily(bot.session)
+        practice_data = await get_or_fetch_bonus_problems(problem)
+        practice_embed = create_practice_embed(practice_data)
+
         if not res["success"] and res.get("reason") == "already_solved":
             embed = discord.Embed(
                 title="Already Logged! 🎯",
@@ -554,7 +653,8 @@ async def slash_solved(interaction: discord.Interaction):
                 ),
                 color=discord.Color.blue()
             )
-            await interaction.followup.send(embed=embed)
+            embed.set_footer(text="Here is today's bonus practice track:")
+            await interaction.followup.send(embeds=[embed, practice_embed])
             return
 
         embed = discord.Embed(
@@ -568,8 +668,8 @@ async def slash_solved(interaction: discord.Interaction):
             ),
             color=discord.Color.green()
         )
-        embed.set_footer(text="Keep the momentum going tomorrow!")
-        await interaction.followup.send(embed=embed)
+        embed.set_footer(text="Keep the momentum going! Here is your 4-problem bonus practice track:")
+        await interaction.followup.send(embeds=[embed, practice_embed])
     except Exception as e:
         await interaction.followup.send(f"⚠️ Error logging completion: {e}", ephemeral=True)
 
@@ -750,6 +850,17 @@ async def prefix_trigger(ctx):
     if not isinstance(channel, discord.TextChannel):
         channel = bot.get_channel(CHANNEL_ID)
     await execute_trigger(channel, ctx.author.mention)
+
+
+@bot.command(name="practice")
+async def prefix_practice(ctx):
+    try:
+        problem = await fetch_leetcode_daily(bot.session)
+        practice_data = await get_or_fetch_bonus_problems(problem)
+        embed = create_practice_embed(practice_data)
+        await ctx.send(embed=embed)
+    except Exception as e:
+        await ctx.send(f"⚠️ Error: {e}")
 
 
 if __name__ == "__main__":
