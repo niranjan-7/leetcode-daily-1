@@ -57,7 +57,7 @@ intents.members = True
 
 class LeetCodeBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix=["!", "\\"], intents=intents, help_command=None)
+        super().__init__(command_prefix=["!", "\\", "/"], intents=intents, help_command=None)
         self.scheduler = AsyncIOScheduler()
         self.session: Optional[aiohttp.ClientSession] = None
 
@@ -337,6 +337,35 @@ async def send_evening_checkin_job():
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user.name} ({bot.user.id})")
+    for guild in bot.guilds:
+        try:
+            bot.tree.copy_global_to(guild=guild)
+            await bot.tree.sync(guild=guild)
+            print(f"Synced slash commands instantly to guild '{guild.name}' ({guild.id}).")
+        except Exception as e:
+            print(f"Warning syncing slash commands to guild '{guild.name}': {e}")
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    if message.author.bot:
+        return
+
+    # Print incoming messages to PM2 logs for monitoring
+    print(f"Message from {message.author} in #{message.channel}: {message.content!r}")
+
+    # If the user typed a known command name directly without any prefix (e.g. "participants", "trigger", "daily")
+    content_stripped = message.content.strip()
+    first_word = content_stripped.lower().split()[0] if content_stripped else ""
+    valid_commands = {
+        "participants", "trigger", "daily", "practice", "hint",
+        "leaderboard", "streak", "help", "solved", "join", "leave", "ping"
+    }
+
+    if first_word in valid_commands and not any(content_stripped.startswith(p) for p in ["!", "\\", "/"]):
+        message.content = "!" + content_stripped
+
+    await bot.process_commands(message)
 
 
 @bot.event
@@ -726,12 +755,13 @@ async def slash_solved(interaction: discord.Interaction):
 @bot.tree.command(name="streak", description="Check your or another member's LeetCode streak and stats")
 @app_commands.describe(member="Member to view streak for (defaults to yourself)")
 async def slash_streak(interaction: discord.Interaction, member: Optional[discord.Member] = None):
+    await interaction.response.defer()
     target = member or interaction.user
     stats = get_user_stats(target.id)
 
     if not stats:
         msg = f"ℹ️ **{target.display_name}** has not recorded any solved problems yet! Use `/solved` to begin."
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.followup.send(msg)
         return
 
     embed = discord.Embed(
@@ -745,15 +775,16 @@ async def slash_streak(interaction: discord.Interaction, member: Optional[discor
     embed.add_field(name="Last Solved Date", value=f"📅 `{stats['last_solved_date']}`", inline=False)
     embed.set_footer(text="Consistency is key to mastery!")
 
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 
 
 @bot.tree.command(name="leaderboard", description="Display the top LeetCode streak leaders in the server")
 async def slash_leaderboard(interaction: discord.Interaction):
+    await interaction.response.defer()
     leaders = get_top_streaks(limit=10)
 
     if not leaders:
-        await interaction.response.send_message("ℹ️ No streaks recorded yet! Be the first by using `/solved`.", ephemeral=True)
+        await interaction.followup.send("ℹ️ No streaks recorded yet! Be the first by using `/solved`.")
         return
 
     medals = ["🥇", "🥈", "🥉"]
@@ -771,14 +802,15 @@ async def slash_leaderboard(interaction: discord.Interaction):
         timestamp=datetime.now()
     )
     embed.set_footer(text="Solve daily to climb the leaderboard!")
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 
 
 @bot.tree.command(name="participants", description="View active members participating in daily challenges")
 async def slash_participants(interaction: discord.Interaction):
+    await interaction.response.defer()
     active = get_active_participants()
     if not active:
-        await interaction.response.send_message("ℹ️ No active participants currently registered. Use `/join` to participate!", ephemeral=True)
+        await interaction.followup.send("ℹ️ No active participants currently registered. Use `/join` to participate!")
         return
 
     today_date = get_current_date_str()
@@ -796,7 +828,7 @@ async def slash_participants(interaction: discord.Interaction):
         color=discord.Color.blue()
     )
     embed.set_footer(text=f"Status for challenge date: {today_date}")
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 
 
 @bot.tree.command(name="join", description="Enroll into daily LeetCode challenge announcements and reminders")
@@ -887,10 +919,25 @@ async def prefix_leaderboard(ctx):
 async def prefix_participants(ctx):
     active = get_active_participants()
     if not active:
-        await ctx.send("ℹ️ No active participants currently registered.")
+        await ctx.send("ℹ️ No active participants currently registered. Use `/join` or `!join` to participate!")
         return
-    lines = [f"• **{p['username']}**" for p in active]
-    await ctx.send(f"**👥 Active LeetCode Participants ({len(active)}):**\n" + "\n".join(lines))
+
+    today_date = get_current_date_str()
+    status = get_challenge_status(today_date)
+    completed_ids = {c["user_id"] for c in status["completed"]}
+
+    lines = []
+    for p in active:
+        done_badge = "✅ Solved" if p["user_id"] in completed_ids else "⏳ Pending"
+        lines.append(f"• **{p['username']}** ({done_badge})")
+
+    embed = discord.Embed(
+        title=f"👥 Active LeetCode Participants ({len(active)})",
+        description="\n".join(lines),
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text=f"Status for challenge date: {today_date}")
+    await ctx.send(embed=embed)
 
 
 @bot.command(name="trigger")
@@ -910,6 +957,49 @@ async def prefix_practice(ctx):
         await ctx.send(embed=embed)
     except Exception as e:
         await ctx.send(f"⚠️ Error: {e}")
+
+
+@bot.command(name="hint")
+async def prefix_hint(ctx, number: Optional[int] = 1):
+    try:
+        problem = await fetch_leetcode_daily(bot.session)
+        hints = problem.get("hints", [])
+        if not hints:
+            await ctx.send(f"💡 No hints are available for **{problem['title']}**.")
+            return
+
+        hint_idx = (number or 1) - 1
+        if hint_idx < 0 or hint_idx >= len(hints):
+            await ctx.send(f"⚠️ Invalid hint number. **{problem['title']}** has {len(hints)} hint(s) available (1 to {len(hints)}).")
+            return
+
+        hint_content = hints[hint_idx]
+        msg = (
+            f"💡 **Hint {hint_idx + 1}/{len(hints)} for {problem['title']}**:\n"
+            f"||{hint_content}||\n\n"
+            f"*(Click the black spoiler box above to reveal)*"
+        )
+        await ctx.send(msg)
+    except Exception as e:
+        await ctx.send(f"⚠️ Error fetching hint: {e}")
+
+
+@bot.command(name="join")
+async def prefix_join(ctx):
+    add_participant(ctx.author.id, ctx.author.display_name)
+    await ctx.send(f"🚀 **{ctx.author.mention}**, you are now enrolled as an active participant! You'll receive daily challenges and smart streak reminders.")
+
+
+@bot.command(name="leave")
+async def prefix_leave(ctx):
+    remove_participant(ctx.author.id)
+    await ctx.send(f"👋 **{ctx.author.mention}**, you have been removed from daily reminder pings. You can rejoin anytime with `/join` or `!join`.")
+
+
+@bot.command(name="ping")
+async def prefix_ping(ctx):
+    latency_ms = round(bot.latency * 1000)
+    await ctx.send(f"🏓 Pong! Latency: **{latency_ms}ms**")
 
 
 if __name__ == "__main__":
