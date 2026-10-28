@@ -18,6 +18,10 @@ An asynchronous, intelligent Discord bot that posts daily LeetCode challenges, p
   - **1:00 PM IST**: Midday check-in (**only pings members who haven't completed yet**; members who solved earlier are completely exempt from pings).
   - **8:30 PM IST**: Evening reminder (**only pings members who STILL haven't completed**; anyone who solved at or after 1:00 PM is also exempt!).
   - If 100% of participants have finished, posts a celebration message with **zero pings**.
+- **🎯 Dynamic Trigger Command (`/trigger`)**:
+  - **Between 5:30 AM and 8:00 AM IST**: Posts the official daily announcement early and automatically skips the scheduled 8:00 AM post to prevent duplicates.
+  - **After 8:00 AM IST**: Evaluates the live completion status and sends an on-demand check-in pinging **only** pending members.
+  - Does not alter or cancel the independent 1:00 PM or 8:30 PM scheduled check-ins.
 - **👥 Dynamic Participant Enrollment**:
   - Automatically registers new members who react `✅` or run `/solved`.
   - Manual enrollment via `/join` and `/leave`.
@@ -30,6 +34,7 @@ An asynchronous, intelligent Discord bot that posts daily LeetCode challenges, p
 | Command | Description |
 | :--- | :--- |
 | `/daily` | View today's active LeetCode daily challenge embed. |
+| `/trigger` | Post daily challenge early (5:30–8:00 AM, skips 8 AM post) OR on-demand check-in pinging only pending members (after 8 AM). |
 | `/hint [num]` | Reveal a spoiler-masked hint privately for today's challenge. |
 | `/solved` | Manually mark today's problem as solved and view your streak. |
 | `/streak [@user]` | View your or another member's current streak, highest streak, and total solves. |

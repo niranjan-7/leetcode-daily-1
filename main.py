@@ -22,7 +22,8 @@ from database import (
     add_participant,
     remove_participant,
     get_active_participants,
-    get_challenge_status
+    get_challenge_status,
+    is_announcement_posted_today
 )
 from leetcode import (
     fetch_leetcode_daily,
@@ -138,6 +139,11 @@ async def send_morning_announcement_job():
         print(f"Error: Channel {CHANNEL_ID} not found.")
         return
     try:
+        today_date = get_current_date_str()
+        if is_announcement_posted_today(today_date):
+            print(f"8:00 AM scheduled post skipped: daily challenge for {today_date} was already announced earlier.")
+            return
+
         problem = await fetch_leetcode_daily(bot.session)
         embed = create_problem_embed(problem)
         quote = get_random_quote()
@@ -149,8 +155,8 @@ async def send_morning_announcement_job():
         msg = await channel.send(content=message_content, embed=embed)
         await msg.add_reaction("✅")
 
-        # Save to database so reactions can be tracked
-        save_daily_post(problem["date"], msg.id, channel.id)
+        # Save to database with post_type='announcement'
+        save_daily_post(problem["date"], msg.id, channel.id, post_type="announcement")
         print(f"8:00 AM Daily challenge '{problem['title']}' posted (msg_id: {msg.id}).")
     except Exception as e:
         print(f"Failed to post 8:00 AM daily problem: {e}")
@@ -207,7 +213,7 @@ async def send_afternoon_checkin_job():
         content = f"{pending_pings} ⏰ **1:00 PM Check-In!** Today's LeetCode challenge is waiting for you."
         msg = await channel.send(content=content, embed=embed)
         await msg.add_reaction("✅")
-        save_daily_post(today_date, msg.id, channel.id)
+        save_daily_post(today_date, msg.id, channel.id, post_type="checkin")
         print(f"1:00 PM check-in posted: {len(pending)} pending members pinged (msg_id: {msg.id}).")
     except Exception as e:
         print(f"Failed to send 1:00 PM check-in: {e}")
@@ -263,7 +269,7 @@ async def send_evening_checkin_job():
         content = f"{pending_pings} 🌙 **8:30 PM Reminder!** Keep your daily streak alive before the reset!"
         msg = await channel.send(content=content, embed=embed)
         await msg.add_reaction("✅")
-        save_daily_post(today_date, msg.id, channel.id)
+        save_daily_post(today_date, msg.id, channel.id, post_type="checkin")
         print(f"8:30 PM reminder posted: {len(pending)} pending members pinged (msg_id: {msg.id}).")
     except Exception as e:
         print(f"Failed to send 8:30 PM reminder: {e}")
@@ -312,6 +318,113 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
 
 # ==========================================
+# MANUAL TRIGGER LOGIC
+# ==========================================
+
+async def execute_trigger(
+    channel: discord.TextChannel,
+    invoker_mention: str,
+    interaction: Optional[discord.Interaction] = None
+) -> None:
+    tz = pytz.timezone(TIMEZONE)
+    now = datetime.now(tz)
+    today_date = now.strftime("%Y-%m-%d")
+    now_minutes = now.hour * 60 + now.minute
+
+    # 1. Before 5:30 AM IST (330 minutes)
+    if now_minutes < 330:
+        msg = (
+            "⏳ Today's new LeetCode daily problem resets at **5:30 AM IST** (00:00 UTC).\n"
+            "Please use `/trigger` after 5:30 AM IST to fetch today's brand-new problem!"
+        )
+        if interaction:
+            await interaction.followup.send(msg)
+        else:
+            await channel.send(msg)
+        return
+
+    already_announced = is_announcement_posted_today(today_date)
+
+    # 2. Before 8:00 AM IST (480 minutes) and NOT yet announced today:
+    # Post the official announcement early and mark it so 8:00 AM scheduled post skips!
+    if now_minutes < 480 and not already_announced:
+        problem = await fetch_leetcode_daily(bot.session)
+        embed = create_problem_embed(problem)
+        quote = get_random_quote()
+
+        active = get_active_participants()
+        pings = build_participant_pings(active) if active else ""
+
+        message_content = (
+            f"{pings} 🚀 **Daily LeetCode Challenge is Live!** (Triggered early by {invoker_mention})\n"
+            f"> *\"{quote}\"*"
+        )
+        msg = await channel.send(content=message_content, embed=embed)
+        await msg.add_reaction("✅")
+        save_daily_post(problem["date"], msg.id, channel.id, post_type="announcement")
+
+        if interaction:
+            await interaction.followup.send(
+                "✅ Posted today's challenge announcement early! The 8:00 AM scheduled post will be automatically skipped.",
+                ephemeral=True
+            )
+        print(f"Manual trigger posted announcement for {today_date} early (msg_id: {msg.id}).")
+        return
+
+    # 3. Post-Announcement Trigger (after 8:00 AM IST or if already announced):
+    # Runs an on-demand check-in: pings ONLY members who have NOT completed today's problem!
+    status = get_challenge_status(today_date)
+    completed = status["completed"]
+    pending = status["pending"]
+    problem = await fetch_leetcode_daily(bot.session)
+
+    if not pending:
+        embed = discord.Embed(
+            title="🌟 On-Demand Status: 100% Completed!",
+            description=(
+                f"Triggered by {invoker_mention}.\n\n"
+                f"All active participants have completed today's challenge: "
+                f"**[{problem['title']}]({problem['url']})**! 🚀\n\n"
+                f"Zero pings needed. Everyone's streak is intact! 🔥"
+            ),
+            color=discord.Color.green()
+        )
+        if interaction:
+            await interaction.followup.send(embed=embed)
+        else:
+            await channel.send(embed=embed)
+        return
+
+    pending_pings = build_participant_pings(pending)
+    embed = discord.Embed(
+        title="⏰ LeetCode Check-In (On-Demand)",
+        description=(
+            f"Triggered by {invoker_mention}.\n\n"
+            f"Today's problem: **[{problem['title']}]({problem['url']})** ({problem['difficulty']})\n"
+            f"Here is the live completion status:"
+        ),
+        color=discord.Color.gold()
+    )
+
+    if completed:
+        completed_names = ", ".join([f"`{c['username']}`" for c in completed])
+        embed.add_field(name="Completed Already 🏅 (Safe from pings)", value=completed_names, inline=False)
+
+    pending_names = ", ".join([f"`{p['username']}`" for p in pending])
+    embed.add_field(name="Still Pending ⏳", value=pending_names, inline=False)
+    embed.set_footer(text="React with ✅ on this post or use /solved to continue your streak and prevent reminders!")
+
+    content = f"{pending_pings} ⏰ **LeetCode Check-In!** Today's problem is still waiting for you."
+    msg = await channel.send(content=content, embed=embed)
+    await msg.add_reaction("✅")
+    save_daily_post(today_date, msg.id, channel.id, post_type="checkin")
+
+    if interaction:
+        await interaction.followup.send("✅ Check-in dispatched! Pinged only the pending participants.", ephemeral=True)
+    print(f"On-demand check-in trigger dispatched: {len(pending)} pending members pinged.")
+
+
+# ==========================================
 # SLASH COMMANDS
 # ==========================================
 
@@ -352,6 +465,7 @@ def build_help_embed() -> discord.Embed:
         name="⚡ Available Commands",
         value=(
             "• `/daily` — View today's active challenge & stats\n"
+            "• `/trigger` — Smart trigger: posts challenge early (5:30–8:00 AM, skips 8 AM cron) OR on-demand check-in pinging only pending members (after 8 AM)\n"
             "• `/hint [num]` — Reveal progressive hints privately with spoiler tags (`||hint||`)\n"
             "• `/solved` — Mark today's challenge as solved & update streak\n"
             "• `/streak [@user]` — View personal or another member's streak stats\n"
@@ -366,6 +480,15 @@ def build_help_embed() -> discord.Embed:
 
     embed.set_footer(text="Consistency beats talent. Keep your streak alive!")
     return embed
+
+
+@bot.tree.command(name="trigger", description="Post daily challenge early (before 8 AM) or run on-demand check-in (after 8 AM)")
+async def slash_trigger(interaction: discord.Interaction):
+    await interaction.response.defer()
+    channel = interaction.channel
+    if not isinstance(channel, discord.TextChannel):
+        channel = bot.get_channel(CHANNEL_ID)
+    await execute_trigger(channel, interaction.user.mention, interaction=interaction)
 
 
 @bot.tree.command(name="daily", description="Fetch today's active LeetCode daily challenge")
@@ -619,6 +742,14 @@ async def prefix_participants(ctx):
         return
     lines = [f"• **{p['username']}**" for p in active]
     await ctx.send(f"**👥 Active LeetCode Participants ({len(active)}):**\n" + "\n".join(lines))
+
+
+@bot.command(name="trigger")
+async def prefix_trigger(ctx):
+    channel = ctx.channel
+    if not isinstance(channel, discord.TextChannel):
+        channel = bot.get_channel(CHANNEL_ID)
+    await execute_trigger(channel, ctx.author.mention)
 
 
 if __name__ == "__main__":

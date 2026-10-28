@@ -53,28 +53,36 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 message_id INTEGER PRIMARY KEY,
                 challenge_date TEXT NOT NULL,
                 channel_id INTEGER NOT NULL,
+                post_type TEXT NOT NULL DEFAULT 'post',
                 posted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             """
         )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_posts_date ON daily_posts(challenge_date);")
 
+        # Ensure post_type column exists if table was created previously
+        cursor.execute("PRAGMA table_info(daily_posts)")
+        columns = [c["name"] for c in cursor.fetchall()]
+        if "post_type" not in columns:
+            cursor.execute("ALTER TABLE daily_posts ADD COLUMN post_type TEXT NOT NULL DEFAULT 'post'")
+
         # Migrate older schema where challenge_date was PRIMARY KEY if present
         cursor.execute("PRAGMA table_info(daily_posts)")
-        columns = cursor.fetchall()
-        pk_col = next((c["name"] for c in columns if c["pk"] == 1), None)
+        columns_info = cursor.fetchall()
+        pk_col = next((c["name"] for c in columns_info if c["pk"] == 1), None)
         if pk_col == "challenge_date":
             cursor.execute("""
                 CREATE TABLE daily_posts_v2 (
                     message_id INTEGER PRIMARY KEY,
                     challenge_date TEXT NOT NULL,
                     channel_id INTEGER NOT NULL,
+                    post_type TEXT NOT NULL DEFAULT 'post',
                     posted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
             """)
             cursor.execute("""
-                INSERT OR IGNORE INTO daily_posts_v2 (message_id, challenge_date, channel_id, posted_at)
-                SELECT message_id, challenge_date, channel_id, posted_at FROM daily_posts;
+                INSERT OR IGNORE INTO daily_posts_v2 (message_id, challenge_date, channel_id, post_type, posted_at)
+                SELECT message_id, challenge_date, channel_id, 'announcement', posted_at FROM daily_posts;
             """)
             cursor.execute("DROP TABLE daily_posts;")
             cursor.execute("ALTER TABLE daily_posts_v2 RENAME TO daily_posts;")
@@ -293,17 +301,34 @@ def get_today_completions(challenge_date: str, db_path: str = DEFAULT_DB_PATH) -
         return [dict(row) for row in cursor.fetchall()]
 
 
-def save_daily_post(challenge_date: str, message_id: int, channel_id: int, db_path: str = DEFAULT_DB_PATH) -> None:
+def save_daily_post(
+    challenge_date: str,
+    message_id: int,
+    channel_id: int,
+    post_type: str = "post",
+    db_path: str = DEFAULT_DB_PATH
+) -> None:
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT OR REPLACE INTO daily_posts (message_id, challenge_date, channel_id, posted_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT OR REPLACE INTO daily_posts (message_id, challenge_date, channel_id, post_type, posted_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
-            (message_id, challenge_date, channel_id)
+            (message_id, challenge_date, channel_id, post_type)
         )
         conn.commit()
+
+
+def is_announcement_posted_today(challenge_date: str, db_path: str = DEFAULT_DB_PATH) -> bool:
+    """Returns True if the primary challenge announcement was already posted for challenge_date."""
+    with get_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) as count FROM daily_posts WHERE challenge_date = ? AND post_type = 'announcement'",
+            (challenge_date,)
+        )
+        return cursor.fetchone()["count"] > 0
 
 
 def get_daily_post_date(message_id: int, db_path: str = DEFAULT_DB_PATH) -> Optional[str]:
