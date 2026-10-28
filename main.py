@@ -66,6 +66,9 @@ class LeetCodeBot(commands.Bot):
         init_db()
         print("SQLite Database initialized with active participants.")
 
+        # 1b. Register persistent views
+        self.add_view(SolvedButtonView())
+
         # 2. Shared aiohttp ClientSession
         self.session = aiohttp.ClientSession()
 
@@ -153,6 +156,65 @@ async def get_or_fetch_bonus_problems(problem: Dict[str, Any]) -> Dict[str, Any]
     return practice_data
 
 
+async def handle_solve_interaction(interaction: discord.Interaction):
+    """Processes problem completion and returns a 100% ephemeral response ('Only you can see this')."""
+    await interaction.response.defer(ephemeral=True)
+    try:
+        today_date = get_current_date_str()
+        username = interaction.user.display_name
+        res = record_completion(interaction.user.id, username, today_date)
+
+        problem = await fetch_leetcode_daily(bot.session)
+        practice_data = await get_or_fetch_bonus_problems(problem)
+        practice_embed = create_practice_embed(practice_data)
+
+        if not res["success"] and res.get("reason") == "already_solved":
+            embed = discord.Embed(
+                title="Already Logged! 🎯",
+                description=(
+                    f"You have already marked today's challenge (`{today_date}`) as completed!\n"
+                    f"You are safe from the 1:00 PM and 8:30 PM reminder pings.\n\n"
+                    f"🔥 Current Streak: **{res['current_streak']} days**\n"
+                    f"🏆 Best Streak: **{res['highest_streak']} days**\n"
+                    f"📚 Total Solved: **{res['total_solved']} problems**"
+                ),
+                color=discord.Color.blue()
+            )
+            embed.set_footer(text="Here is today's bonus practice track:")
+            await interaction.followup.send(embeds=[embed, practice_embed], ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="Challenge Completed! 🏆",
+            description=(
+                f"Congratulations {interaction.user.mention}! Your submission for `{today_date}` has been logged.\n"
+                f"You will **not** be pinged in today's check-ins.\n\n"
+                f"🔥 Current Streak: **{res['current_streak']} days**\n"
+                f"🏆 Best Streak: **{res['highest_streak']} days**\n"
+                f"📚 Total Solved: **{res['total_solved']} problems**"
+            ),
+            color=discord.Color.green()
+        )
+        embed.set_footer(text="Keep the momentum going! Here is your 4-problem bonus practice track:")
+        await interaction.followup.send(embeds=[embed, practice_embed], ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"⚠️ Error logging completion: {e}", ephemeral=True)
+
+
+class SolvedButtonView(discord.ui.View):
+    """Persistent button view allowing solvers to log completion ephemerally on any challenge or check-in card."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Mark Solved ✅",
+        style=discord.ButtonStyle.success,
+        custom_id="mark_solved_button_persistent"
+    )
+    async def on_mark_solved(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await handle_solve_interaction(interaction)
+
+
 # ==========================================
 # SCHEDULED JOBS
 # ==========================================
@@ -177,7 +239,7 @@ async def send_morning_announcement_job():
         pings = build_participant_pings(active) if active else ""
 
         message_content = f"{pings} 🚀 **Daily LeetCode Challenge is Live!**\n> *\"{quote}\"*"
-        msg = await channel.send(content=message_content, embed=embed)
+        msg = await channel.send(content=message_content, embed=embed, view=SolvedButtonView())
         await msg.add_reaction("✅")
 
         # Save to database with post_type='announcement'
@@ -251,7 +313,7 @@ async def send_afternoon_checkin_job():
             content = f"{pending_pings} ⏰ **1:00 PM Check-In!** Today's LeetCode challenge is waiting for you."
             embeds = [embed]
 
-        msg = await channel.send(content=content, embeds=embeds)
+        msg = await channel.send(content=content, embeds=embeds, view=SolvedButtonView())
         await msg.add_reaction("✅")
         save_daily_post(today_date, msg.id, channel.id, post_type="checkin")
         print(f"1:00 PM check-in posted: {len(pending)} pending, {len(completed)} completed (msg_id: {msg.id}).")
@@ -322,7 +384,7 @@ async def send_evening_checkin_job():
             content = f"{pending_pings} 🌙 **8:30 PM Reminder!** Keep your daily streak alive before the reset!"
             embeds = [embed]
 
-        msg = await channel.send(content=content, embeds=embeds)
+        msg = await channel.send(content=content, embeds=embeds, view=SolvedButtonView())
         await msg.add_reaction("✅")
         save_daily_post(today_date, msg.id, channel.id, post_type="checkin")
         print(f"8:30 PM reminder posted: {len(pending)} pending, {len(completed)} completed (msg_id: {msg.id}).")
@@ -391,26 +453,7 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     username = member.display_name if member else f"User-{payload.user_id}"
 
     result = record_completion(payload.user_id, username, challenge_date)
-
-    channel = bot.get_channel(payload.channel_id)
-    if channel:
-        if result["success"]:
-            try:
-                problem = await fetch_leetcode_daily(bot.session)
-                practice_data = await get_or_fetch_bonus_problems(problem)
-                practice_embed = create_practice_embed(practice_data)
-                await channel.send(
-                    f"🔥 **{username}** completed challenge `{challenge_date}`! Current streak: **{result['current_streak']} days**! 🎉\n"
-                    f"Here is your personal 4-problem practice set on **{practice_data['topic_name']}** to keep grinding:",
-                    embed=practice_embed,
-                    delete_after=180
-                )
-            except Exception as e:
-                print(f"Error sending reaction practice set: {e}")
-                await channel.send(
-                    f"🔥 **{username}** completed challenge `{challenge_date}`! Current streak: **{result['current_streak']} days**! 🎉",
-                    delete_after=20
-                )
+    print(f"Reaction ✅: Logged completion quietly for {username} ({payload.user_id}) on {challenge_date} (streak: {result['current_streak']}).")
 
 
 # ==========================================
@@ -457,9 +500,9 @@ async def execute_trigger(
                 f"> *\"{quote}\"*"
             )
             if interaction:
-                msg = await interaction.followup.send(content=message_content, embed=embed)
+                msg = await interaction.followup.send(content=message_content, embed=embed, view=SolvedButtonView())
             elif channel:
-                msg = await channel.send(content=message_content, embed=embed)
+                msg = await channel.send(content=message_content, embed=embed, view=SolvedButtonView())
             else:
                 return
 
@@ -496,9 +539,9 @@ async def execute_trigger(
             )
             content = f"{completed_pings} 🌟 **100% Completed!** Here is today's bonus practice track:"
             if interaction:
-                msg = await interaction.followup.send(content=content, embeds=[embed, practice_embed])
+                msg = await interaction.followup.send(content=content, embeds=[embed, practice_embed], view=SolvedButtonView())
             elif channel:
-                msg = await channel.send(content=content, embeds=[embed, practice_embed])
+                msg = await channel.send(content=content, embeds=[embed, practice_embed], view=SolvedButtonView())
             else:
                 return
 
@@ -543,9 +586,9 @@ async def execute_trigger(
             embeds = [embed]
 
         if interaction:
-            msg = await interaction.followup.send(content=content, embeds=embeds)
+            msg = await interaction.followup.send(content=content, embeds=embeds, view=SolvedButtonView())
         elif channel:
-            msg = await channel.send(content=content, embeds=embeds)
+            msg = await channel.send(content=content, embeds=embeds, view=SolvedButtonView())
         else:
             return
 
@@ -595,12 +638,13 @@ def build_help_embed() -> discord.Embed:
     embed.add_field(
         name="🔥 How Streak Tracking & Smart Pings Work",
         value=(
-            "1. **Any Post Reaction**: Click the **✅** reaction on **any** post (8:00 AM announcement, 1:00 PM check-in, or 8:30 PM reminder) OR run `/solved` to continue your streak!\n"
-            "2. **Cascading Smart Exemptions**:\n"
+            "1. **Private Mark Solved**: Click the **Mark Solved ✅** button on any challenge or check-in card OR run `/solved`! Your completion and bonus practice track are 100% private (`Only you can see this`).\n"
+            "2. **Quiet Emoji Reaction**: Clicking the **✅** reaction also logs your completion quietly without posting any messages into the channel.\n"
+            "3. **Cascading Smart Exemptions**:\n"
             "   • Solve before 1:00 PM ➔ **Zero pings** at 1:00 PM & 8:30 PM.\n"
             "   • Solve at or after 1:00 PM ➔ **Zero pings** at 8:30 PM.\n"
             "   • Only members who still haven't solved get pinged in reminders!\n"
-            "3. **Automatic Participation**: Reacting ✅ on any post or using `/solved` automatically enrolls you as an active participant."
+            "4. **Automatic Participation**: Solving via button, reaction, or `/solved` automatically enrolls you as an active participant."
         ),
         inline=False
     )
@@ -612,7 +656,7 @@ def build_help_embed() -> discord.Embed:
             "• `/practice` — View today's 4 similar practice problems (2 Easy, 1 Medium, 1 Hard)\n"
             "• `/trigger` — Smart trigger: posts challenge early (5:30–8:00 AM, skips 8 AM cron) OR on-demand check-in pinging only pending members (after 8 AM)\n"
             "• `/hint [num]` — Reveal progressive hints privately with spoiler tags (`||hint||`)\n"
-            "• `/solved` — Mark today's challenge as solved & update streak\n"
+            "• `/solved` — Mark today's challenge as solved privately (`Only you can see this`)\n"
             "• `/streak [@user]` — View personal or another member's streak stats\n"
             "• `/leaderboard` — View the top streak leaders in the server\n"
             "• `/participants` — View currently enrolled active participants\n"
@@ -707,49 +751,9 @@ async def slash_hint(interaction: discord.Interaction, number: Optional[int] = 1
         await interaction.followup.send(f"⚠️ Error fetching hint: {e}", ephemeral=True)
 
 
-@bot.tree.command(name="solved", description="Mark today's LeetCode daily challenge as solved and update your streak")
+@bot.tree.command(name="solved", description="Mark today's LeetCode daily challenge as solved privately (Only you can see this)")
 async def slash_solved(interaction: discord.Interaction):
-    await interaction.response.defer()
-    try:
-        today_date = get_current_date_str()
-        username = interaction.user.display_name
-        res = record_completion(interaction.user.id, username, today_date)
-
-        problem = await fetch_leetcode_daily(bot.session)
-        practice_data = await get_or_fetch_bonus_problems(problem)
-        practice_embed = create_practice_embed(practice_data)
-
-        if not res["success"] and res.get("reason") == "already_solved":
-            embed = discord.Embed(
-                title="Already Logged! 🎯",
-                description=(
-                    f"You have already marked today's challenge (`{today_date}`) as completed!\n"
-                    f"You are safe from the 1:00 PM and 8:30 PM reminder pings.\n\n"
-                    f"🔥 Current Streak: **{res['current_streak']} days**\n"
-                    f"🏆 Best Streak: **{res['highest_streak']} days**\n"
-                    f"📚 Total Solved: **{res['total_solved']} problems**"
-                ),
-                color=discord.Color.blue()
-            )
-            embed.set_footer(text="Here is today's bonus practice track:")
-            await interaction.followup.send(embeds=[embed, practice_embed])
-            return
-
-        embed = discord.Embed(
-            title="Challenge Completed! 🏆",
-            description=(
-                f"Congratulations {interaction.user.mention}! Your submission for `{today_date}` has been logged.\n"
-                f"You will **not** be pinged in today's check-ins.\n\n"
-                f"🔥 Current Streak: **{res['current_streak']} days**\n"
-                f"🏆 Best Streak: **{res['highest_streak']} days**\n"
-                f"📚 Total Solved: **{res['total_solved']} problems**"
-            ),
-            color=discord.Color.green()
-        )
-        embed.set_footer(text="Keep the momentum going! Here is your 4-problem bonus practice track:")
-        await interaction.followup.send(embeds=[embed, practice_embed])
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ Error logging completion: {e}")
+    await handle_solve_interaction(interaction)
 
 
 @bot.tree.command(name="streak", description="Check your or another member's LeetCode streak and stats")
@@ -887,10 +891,22 @@ async def prefix_daily(ctx):
 async def prefix_solved(ctx):
     today_date = get_current_date_str()
     res = record_completion(ctx.author.id, ctx.author.display_name, today_date)
+
+    try:
+        await ctx.message.delete()
+    except Exception:
+        pass
+
     if not res["success"] and res.get("reason") == "already_solved":
-        await ctx.send(f"🎯 {ctx.author.mention}, you already logged today's challenge! Streak: **{res['current_streak']} days**")
+        await ctx.send(
+            f"🎯 {ctx.author.mention}, you already logged today's challenge! Current streak: **{res['current_streak']} days**! *(Tip: Use `/solved` or click the **Mark Solved ✅** button on the post for a 100% private popup)*",
+            delete_after=6
+        )
     else:
-        await ctx.send(f"🏆 {ctx.author.mention} solved today's challenge! Streak: 🔥 **{res['current_streak']} days** (Total: {res['total_solved']})")
+        await ctx.send(
+            f"🏆 {ctx.author.mention}, marked as solved! Streak: 🔥 **{res['current_streak']} days**! *(Tip: Use `/solved` or click the **Mark Solved ✅** button on the post for a 100% private popup)*",
+            delete_after=6
+        )
 
 
 @bot.command(name="streak")

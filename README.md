@@ -9,9 +9,10 @@ An asynchronous, intelligent Discord bot that posts daily LeetCode challenges, p
 - **⚡ Asynchronous LeetCode GraphQL Client**: Powered by `aiohttp` with anti-bot headers and resilient query execution.
 - **📊 Rich Problem Embeds**: Includes difficulty badges (🟢 Easy, 🟡 Medium, 🔴 Hard), acceptance rate, problem topics, and date.
 - **💡 Progressive Hint System**: Reveal hints on demand with Discord spoiler masking (`||hint||`) via `/hint [num]` so other solvers aren't spoiled.
-- **🔥 Multi-Stage Reaction & Streak Tracking (SQLite)**:
-  - Mark completion by clicking the **`✅`** reaction on **any** bot post (8:00 AM announcement, 1:00 PM check-in, or 8:30 PM reminder), OR
-  - Run `/solved` in any channel.
+- **🔥 Private Ephemeral Streak Tracking (`Only you can see this`)**:
+  - Click the **`Mark Solved ✅`** button on any challenge card or run `/solved`.
+  - Your completion confirmation, updated streak, and 4-problem bonus practice track are displayed in a **100% private ephemeral message** (`Only you can see this • Dismiss message`) so your solutions and stats never clutter the public channel.
+  - Clicking the **`✅`** emoji reaction also quietly logs completion in SQLite without sending any public channel messages.
   - Automatically advances streaks, logs personal bests, and tracks total solved problems.
 - **⏰ 3-Stage Smart Reminders with Cascading Exemptions (IST)**:
   - **8:00 AM IST**: Daily challenge announcement (only pings enrolled participants).
@@ -25,31 +26,34 @@ An asynchronous, intelligent Discord bot that posts daily LeetCode challenges, p
 - **📚 Curated Bonus Practice Track (2 Easy, 1 Medium, 1 Hard)**:
   - Dynamically queries LeetCode for 4 similar free practice problems matching today's primary topic.
   - Cached daily in SQLite (`bonus_problems`) for zero latency.
-  - Delivered immediately to the solver upon completing the daily challenge.
+  - Delivered privately to the solver upon completing the daily challenge.
   - Highlighted in check-in and trigger posts tagging **only completed solvers** near the practice challenge set.
 - **👥 Dynamic Participant Enrollment**:
-  - Automatically registers new members who react `✅` or run `/solved`.
+  - Automatically registers new members who click `Mark Solved ✅`, react `✅`, or run `/solved`.
   - Manual enrollment via `/join` and `/leave`.
 - **🏆 Server Leaderboard**: Top 10 streak leaders with `/leaderboard`.
 
 ---
 
-## 🛠️ Slash Commands
+## 🛠️ Commands & Usage
 
-| Command | Description |
-| :--- | :--- |
-| `/daily` | View today's active LeetCode daily challenge embed. |
-| `/practice` | View today's curated 4 similar practice problems (2 Easy, 1 Medium, 1 Hard). |
-| `/trigger` | Post daily challenge early (5:30–8:00 AM, skips 8 AM post) OR on-demand check-in pinging only pending members (after 8 AM). |
-| `/hint [num]` | Reveal a spoiler-masked hint privately for today's challenge. |
-| `/solved` | Manually mark today's problem as solved and view your streak. |
-| `/streak [@user]` | View your or another member's current streak, highest streak, and total solves. |
-| `/leaderboard` | View the server's top 10 streak leaderboard. |
-| `/participants` | View all currently enrolled participants and today's completion status. |
-| `/join` | Enroll as an active participant for daily announcements and smart reminders. |
-| `/leave` | Opt out of daily reminder pings. |
-| `/help` | View the interactive guide and schedule. |
-| `/ping` | Check bot latency and status. |
+The bot supports native Discord **Slash Commands**, traditional **Prefix Commands** (`!`, `\`, `/`), and **plain text words** in chat:
+
+| Command | Type | Description |
+| :--- | :--- | :--- |
+| `/daily` | Public | View today's active LeetCode daily challenge embed. |
+| `/practice` | Public | View today's curated 4 similar practice problems (2 Easy, 1 Medium, 1 Hard). |
+| `/trigger` | Public | Post daily challenge early (5:30–8:00 AM, skips 8 AM post) OR on-demand check-in pinging only pending members (after 8 AM). |
+| `/hint [num]` | Ephemeral | Reveal a spoiler-masked hint privately (`Only you can see this`). |
+| `/solved` | Ephemeral | Mark today's problem as solved privately with streak & bonus problems (`Only you can see this`). |
+| `Mark Solved ✅` | Button | Persistent interactive button on challenge cards to log completion privately. |
+| `/streak [@user]` | Public | View your or another member's current streak, highest streak, and total solves. |
+| `/leaderboard` | Public | View the server's top 10 streak leaderboard. |
+| `/participants` | Public | View all currently enrolled participants and live `✅ Solved` / `⏳ Pending` status. |
+| `/join` | Public | Enroll as an active participant for daily announcements and smart reminders. |
+| `/leave` | Ephemeral | Opt out of daily reminder pings. |
+| `/help` | Public | View the interactive guide and schedule. |
+| `/ping` | Ephemeral | Check bot latency and status. |
 
 ---
 
