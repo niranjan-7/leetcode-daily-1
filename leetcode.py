@@ -364,5 +364,5 @@ def create_problem_embed(problem: Dict[str, Any]) -> discord.Embed:
         inline=False
     )
 
-    embed.set_footer(text="React with ✅ or use /solved to track your daily streak!")
+    embed.set_footer(text="Click 'Mark Solved ✅' below or use /solved to track your streak privately!")
     return embed

@@ -240,7 +240,6 @@ async def send_morning_announcement_job():
 
         message_content = f"{pings} 🚀 **Daily LeetCode Challenge is Live!**\n> *\"{quote}\"*"
         msg = await channel.send(content=message_content, embed=embed, view=SolvedButtonView())
-        await msg.add_reaction("✅")
 
         # Save to database with post_type='announcement'
         save_daily_post(problem["date"], msg.id, channel.id, post_type="announcement")
@@ -299,7 +298,7 @@ async def send_afternoon_checkin_job():
 
         pending_names = ", ".join([f"`{p['username']}`" for p in pending])
         embed.add_field(name="Still Pending ⏳", value=pending_names, inline=False)
-        embed.set_footer(text="React with ✅ on this post or use /solved to continue your streak and prevent 8:30 PM pings!")
+        embed.set_footer(text="Click 'Mark Solved ✅' below or use /solved to continue your streak privately!")
 
         if completed:
             completed_pings = build_participant_pings(completed)
@@ -314,7 +313,6 @@ async def send_afternoon_checkin_job():
             embeds = [embed]
 
         msg = await channel.send(content=content, embeds=embeds, view=SolvedButtonView())
-        await msg.add_reaction("✅")
         save_daily_post(today_date, msg.id, channel.id, post_type="checkin")
         print(f"1:00 PM check-in posted: {len(pending)} pending, {len(completed)} completed (msg_id: {msg.id}).")
     except Exception as e:
@@ -370,7 +368,7 @@ async def send_evening_checkin_job():
 
         pending_names = ", ".join([f"`{p['username']}`" for p in pending])
         embed.add_field(name="Action Required ⚠️", value=pending_names, inline=False)
-        embed.set_footer(text="React with ✅ on this post or run /solved now to save your streak!")
+        embed.set_footer(text="Click 'Mark Solved ✅' below or use /solved now to save your streak privately!")
 
         if completed:
             completed_pings = build_participant_pings(completed)
@@ -385,7 +383,6 @@ async def send_evening_checkin_job():
             embeds = [embed]
 
         msg = await channel.send(content=content, embeds=embeds, view=SolvedButtonView())
-        await msg.add_reaction("✅")
         save_daily_post(today_date, msg.id, channel.id, post_type="checkin")
         print(f"8:30 PM reminder posted: {len(pending)} pending, {len(completed)} completed (msg_id: {msg.id}).")
     except Exception as e:
@@ -506,11 +503,6 @@ async def execute_trigger(
             else:
                 return
 
-            try:
-                await msg.add_reaction("✅")
-            except Exception as rx_err:
-                print(f"Warning adding reaction: {rx_err}")
-
             chan_id = channel.id if channel else CHANNEL_ID
             save_daily_post(problem["date"], msg.id, chan_id, post_type="announcement")
             print(f"Trigger posted daily announcement for {today_date} (msg_id: {msg.id}).")
@@ -545,11 +537,6 @@ async def execute_trigger(
             else:
                 return
 
-            try:
-                await msg.add_reaction("✅")
-            except Exception as rx_err:
-                print(f"Warning adding reaction: {rx_err}")
-
             chan_id = channel.id if channel else CHANNEL_ID
             save_daily_post(today_date, msg.id, chan_id, post_type="checkin")
             return
@@ -571,7 +558,7 @@ async def execute_trigger(
 
         pending_names = ", ".join([f"`{p['username']}`" for p in pending])
         embed.add_field(name="Still Pending ⏳", value=pending_names, inline=False)
-        embed.set_footer(text="React with ✅ on this post or use /solved to continue your streak and prevent reminders!")
+        embed.set_footer(text="Click 'Mark Solved ✅' below or use /solved to continue your streak privately!")
 
         if completed:
             completed_pings = build_participant_pings(completed)
@@ -591,11 +578,6 @@ async def execute_trigger(
             msg = await channel.send(content=content, embeds=embeds, view=SolvedButtonView())
         else:
             return
-
-        try:
-            await msg.add_reaction("✅")
-        except Exception as rx_err:
-            print(f"Warning adding reaction: {rx_err}")
 
         chan_id = channel.id if channel else CHANNEL_ID
         save_daily_post(today_date, msg.id, chan_id, post_type="checkin")
