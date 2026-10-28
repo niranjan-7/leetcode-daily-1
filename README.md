@@ -9,14 +9,15 @@ An asynchronous, intelligent Discord bot that posts daily LeetCode challenges, p
 - **⚡ Asynchronous LeetCode GraphQL Client**: Powered by `aiohttp` with anti-bot headers and resilient query execution.
 - **📊 Rich Problem Embeds**: Includes difficulty badges (🟢 Easy, 🟡 Medium, 🔴 Hard), acceptance rate, problem topics, and date.
 - **💡 Progressive Hint System**: Reveal hints on demand with Discord spoiler masking (`||hint||`) via `/hint [num]` so other solvers aren't spoiled.
-- **🔥 Automatic Streak Tracking (SQLite)**:
-  - Mark completion by simply clicking the **`✅`** reaction on the daily announcement post, OR
+- **🔥 Multi-Stage Reaction & Streak Tracking (SQLite)**:
+  - Mark completion by clicking the **`✅`** reaction on **any** bot post (8:00 AM announcement, 1:00 PM check-in, or 8:30 PM reminder), OR
   - Run `/solved` in any channel.
-  - Automatically calculates current streaks, personal best streaks, and total solved count.
-- **⏰ 3-Stage Smart Reminders (IST)**:
+  - Automatically advances streaks, logs personal bests, and tracks total solved problems.
+- **⏰ 3-Stage Smart Reminders with Cascading Exemptions (IST)**:
   - **8:00 AM IST**: Daily challenge announcement (only pings enrolled participants).
-  - **1:00 PM IST**: Midday check-in (**only pings members who haven't completed yet**; completed members are exempt).
-  - **8:30 PM IST**: Evening reminder (**only pings members who haven't completed yet** before midnight reset).
+  - **1:00 PM IST**: Midday check-in (**only pings members who haven't completed yet**; members who solved earlier are completely exempt from pings).
+  - **8:30 PM IST**: Evening reminder (**only pings members who STILL haven't completed**; anyone who solved at or after 1:00 PM is also exempt!).
+  - If 100% of participants have finished, posts a celebration message with **zero pings**.
 - **👥 Dynamic Participant Enrollment**:
   - Automatically registers new members who react `✅` or run `/solved`.
   - Manual enrollment via `/join` and `/leave`.

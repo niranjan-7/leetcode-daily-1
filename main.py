@@ -202,11 +202,13 @@ async def send_afternoon_checkin_job():
 
         pending_names = ", ".join([f"`{p['username']}`" for p in pending])
         embed.add_field(name="Still Pending ⏳", value=pending_names, inline=False)
-        embed.set_footer(text="React with ✅ on today's announcement post or use /solved to stop pings!")
+        embed.set_footer(text="React with ✅ on this post or use /solved to continue your streak and prevent 8:30 PM pings!")
 
         content = f"{pending_pings} ⏰ **1:00 PM Check-In!** Today's LeetCode challenge is waiting for you."
-        await channel.send(content=content, embed=embed)
-        print(f"1:00 PM check-in posted: {len(pending)} pending members pinged.")
+        msg = await channel.send(content=content, embed=embed)
+        await msg.add_reaction("✅")
+        save_daily_post(today_date, msg.id, channel.id)
+        print(f"1:00 PM check-in posted: {len(pending)} pending members pinged (msg_id: {msg.id}).")
     except Exception as e:
         print(f"Failed to send 1:00 PM check-in: {e}")
 
@@ -256,11 +258,13 @@ async def send_evening_checkin_job():
 
         pending_names = ", ".join([f"`{p['username']}`" for p in pending])
         embed.add_field(name="Action Required ⚠️", value=pending_names, inline=False)
-        embed.set_footer(text="React with ✅ on today's announcement post or run /solved now!")
+        embed.set_footer(text="React with ✅ on this post or run /solved now to save your streak!")
 
         content = f"{pending_pings} 🌙 **8:30 PM Reminder!** Keep your daily streak alive before the reset!"
-        await channel.send(content=content, embed=embed)
-        print(f"8:30 PM reminder posted: {len(pending)} pending members pinged.")
+        msg = await channel.send(content=content, embed=embed)
+        await msg.add_reaction("✅")
+        save_daily_post(today_date, msg.id, channel.id)
+        print(f"8:30 PM reminder posted: {len(pending)} pending members pinged (msg_id: {msg.id}).")
     except Exception as e:
         print(f"Failed to send 8:30 PM reminder: {e}")
 
@@ -334,9 +338,12 @@ def build_help_embed() -> discord.Embed:
     embed.add_field(
         name="🔥 How Streak Tracking & Smart Pings Work",
         value=(
-            "1. **Mark as Solved**: Click the **✅** reaction on today's announcement post OR run `/solved`.\n"
-            "2. **Smart Exemption**: Once you mark it solved, **you will NOT be pinged** in the 1:00 PM and 8:30 PM check-in posts!\n"
-            "3. **Automatic Participation**: Reacting ✅ or using `/solved` automatically enrolls you as an active participant."
+            "1. **Any Post Reaction**: Click the **✅** reaction on **any** post (8:00 AM announcement, 1:00 PM check-in, or 8:30 PM reminder) OR run `/solved` to continue your streak!\n"
+            "2. **Cascading Smart Exemptions**:\n"
+            "   • Solve before 1:00 PM ➔ **Zero pings** at 1:00 PM & 8:30 PM.\n"
+            "   • Solve at or after 1:00 PM ➔ **Zero pings** at 8:30 PM.\n"
+            "   • Only members who still haven't solved get pinged in reminders!\n"
+            "3. **Automatic Participation**: Reacting ✅ on any post or using `/solved` automatically enrolls you as an active participant."
         ),
         inline=False
     )

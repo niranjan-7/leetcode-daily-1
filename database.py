@@ -50,13 +50,35 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS daily_posts (
-                challenge_date TEXT PRIMARY KEY,
-                message_id INTEGER NOT NULL,
+                message_id INTEGER PRIMARY KEY,
+                challenge_date TEXT NOT NULL,
                 channel_id INTEGER NOT NULL,
                 posted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             """
         )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_posts_date ON daily_posts(challenge_date);")
+
+        # Migrate older schema where challenge_date was PRIMARY KEY if present
+        cursor.execute("PRAGMA table_info(daily_posts)")
+        columns = cursor.fetchall()
+        pk_col = next((c["name"] for c in columns if c["pk"] == 1), None)
+        if pk_col == "challenge_date":
+            cursor.execute("""
+                CREATE TABLE daily_posts_v2 (
+                    message_id INTEGER PRIMARY KEY,
+                    challenge_date TEXT NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    posted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            cursor.execute("""
+                INSERT OR IGNORE INTO daily_posts_v2 (message_id, challenge_date, channel_id, posted_at)
+                SELECT message_id, challenge_date, channel_id, posted_at FROM daily_posts;
+            """)
+            cursor.execute("DROP TABLE daily_posts;")
+            cursor.execute("ALTER TABLE daily_posts_v2 RENAME TO daily_posts;")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_posts_date ON daily_posts(challenge_date);")
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS participants (
@@ -276,10 +298,10 @@ def save_daily_post(challenge_date: str, message_id: int, channel_id: int, db_pa
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT OR REPLACE INTO daily_posts (challenge_date, message_id, channel_id, posted_at)
+            INSERT OR REPLACE INTO daily_posts (message_id, challenge_date, channel_id, posted_at)
             VALUES (?, ?, ?, CURRENT_TIMESTAMP)
             """,
-            (challenge_date, message_id, channel_id)
+            (message_id, challenge_date, channel_id)
         )
         conn.commit()
 
