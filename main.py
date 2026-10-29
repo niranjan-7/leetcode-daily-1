@@ -1,5 +1,6 @@
 import os
 import random
+import asyncio
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -141,6 +142,15 @@ class LeetCodeBot(commands.Bot):
             timezone=tz
         )
         print("Scheduled daily midnight pruning of inactive participants (>60 days).")
+
+        # Watchdog: Every 15 minutes, catch up on missed morning announcement (e.g. if phone was asleep/offline at 8:00 AM)
+        self.scheduler.add_job(
+            check_and_recover_announcement_job,
+            "interval",
+            minutes=15,
+            timezone=tz
+        )
+        print("Scheduled 15-minute announcement watchdog for auto-recovery.")
 
         self.scheduler.start()
 
@@ -293,29 +303,39 @@ async def send_morning_announcement_job():
     if not channel:
         print(f"Error: Channel {CHANNEL_ID} not found.")
         return
-    try:
-        today_date = get_current_date_str()
-        if is_announcement_posted_today(today_date):
-            print(f"8:00 AM scheduled post skipped: daily challenge for {today_date} was already announced earlier.")
+
+    today_date = get_current_date_str()
+    if is_announcement_posted_today(today_date):
+        print(f"Daily challenge for {today_date} was already announced earlier.")
+        return
+
+    max_attempts = 10
+    for attempt in range(1, max_attempts + 1):
+        try:
+            problem = await fetch_leetcode_daily(bot.session)
+            embed = create_problem_embed(problem)
+            title = get_morning_title()
+            quote = get_morning_quote()
+
+            active = get_active_participants()
+            pings = build_participant_pings(active) if active else ""
+
+            message_content = f"{pings} **{title}**\n> *\"{quote}\"*"
+            msg = await channel.send(content=message_content, embed=embed, view=SolvedButtonView())
+
+            # Save to database with post_type='announcement'
+            save_daily_post(problem["date"], msg.id, channel.id, post_type="announcement")
+            print(f"Daily challenge '{problem['title']}' posted successfully (msg_id: {msg.id}).")
             return
-
-        problem = await fetch_leetcode_daily(bot.session)
-        embed = create_problem_embed(problem)
-        title = get_morning_title()
-        quote = get_morning_quote()
-
-        active = get_active_participants()
-        pings = build_participant_pings(active) if active else ""
-
-        message_content = f"{pings} **{title}**\n> *\"{quote}\"*"
-        msg = await channel.send(content=message_content, embed=embed, view=SolvedButtonView())
-
-        # Save to database with post_type='announcement'
-        save_daily_post(problem["date"], msg.id, channel.id, post_type="announcement")
-        print(f"8:00 AM Daily challenge '{problem['title']}' posted (msg_id: {msg.id}).")
-    except Exception as e:
-        print(f"Failed to post 8:00 AM daily problem: {e}")
-        await channel.send(f"⚠️ Failed to fetch today's problem: {e}")
+        except Exception as e:
+            print(f"Attempt {attempt}/{max_attempts} to post 8:00 AM daily problem failed: {e}")
+            if attempt < max_attempts:
+                await asyncio.sleep(20)
+            else:
+                try:
+                    await channel.send(f"⚠️ Failed to fetch today's problem after multiple attempts: {e}")
+                except Exception:
+                    pass
 
 
 async def send_afternoon_checkin_job():
@@ -325,6 +345,11 @@ async def send_afternoon_checkin_job():
         return
     try:
         today_date = get_current_date_str()
+        if not is_announcement_posted_today(today_date):
+            print(f"1:00 PM check-in detected missing announcement for {today_date}. Posting announcement first...")
+            await send_morning_announcement_job()
+            return
+
         status = get_challenge_status(today_date)
         completed = status["completed"]
         pending = status["pending"]
@@ -516,6 +541,19 @@ async def prune_expired_participants_job():
         print(f"Error during expired participant pruning: {e}")
 
 
+async def check_and_recover_announcement_job():
+    """Watchdog: Checks between 8:00 AM and 1:00 PM if the announcement was missed due to network/downtime and posts it."""
+    tz = pytz.timezone(TIMEZONE)
+    now = datetime.now(tz)
+    now_minutes = now.hour * 60 + now.minute
+    # Between 8:00 AM and 1:00 PM (480 to 780 minutes)
+    if 480 <= now_minutes < 780:
+        today_date = now.strftime("%Y-%m-%d")
+        if not is_announcement_posted_today(today_date):
+            print(f"Watchdog triggered: Missed 8:00 AM post detected for {today_date}. Recovering now...")
+            await send_morning_announcement_job()
+
+
 # ==========================================
 # DISCORD EVENTS
 # ==========================================
@@ -531,6 +569,15 @@ async def on_ready():
             print(f"Cleared guild-specific commands for '{guild.name}' ({guild.id}) to eliminate duplicate command listings.")
         except Exception as e:
             print(f"Warning clearing guild commands for '{guild.name}': {e}")
+
+    # Startup catch-up: If it's past 8:00 AM and today's announcement wasn't posted yet (e.g. after restart or downtime)
+    tz = pytz.timezone(TIMEZONE)
+    now = datetime.now(tz)
+    now_minutes = now.hour * 60 + now.minute
+    today_date = now.strftime("%Y-%m-%d")
+    if now_minutes >= 480 and not is_announcement_posted_today(today_date):
+        print(f"Startup catch-up: Daily announcement for {today_date} not posted yet. Posting now...")
+        bot.loop.create_task(send_morning_announcement_job())
 
 
 @bot.event

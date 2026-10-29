@@ -1,6 +1,7 @@
 import html
 import re
 import random
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 import aiohttp
@@ -150,10 +151,21 @@ async def fetch_leetcode_daily(session: Optional[aiohttp.ClientSession] = None) 
     payload = {"query": query}
 
     async def _do_fetch(s: aiohttp.ClientSession):
-        async with s.post(LEETCODE_URL, json=payload, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-            return data
+        max_retries = 5
+        last_exc = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                async with s.post(LEETCODE_URL, json=payload, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    resp.raise_for_status()
+                    data = await resp.json()
+                    return data
+            except Exception as e:
+                last_exc = e
+                if attempt < max_retries:
+                    wait_time = min(2 ** attempt + random.uniform(0.5, 1.5), 20)
+                    print(f"Warning: LeetCode daily fetch attempt {attempt}/{max_retries} failed ({e}). Retrying in {wait_time:.1f}s...")
+                    await asyncio.sleep(wait_time)
+        raise last_exc
 
     if session is not None:
         data = await _do_fetch(session)
@@ -214,31 +226,35 @@ async def fetch_bonus_practice_problems(
             "limit": 20,
             "filters": {"tags": [slug] if slug else [], "difficulty": diff_str}
         }
-        try:
-            async with session.post(
-                LEETCODE_URL,
-                json={"query": query, "variables": variables},
-                headers=HEADERS,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as resp:
-                resp.raise_for_status()
-                res = await resp.json()
-                raw_list = res.get("data", {}).get("problemsetQuestionList", {}).get("questions", [])
-                free = [
-                    {
-                        "id": q["questionFrontendId"],
-                        "title": q["title"],
-                        "url": f"https://leetcode.com/problems/{q['titleSlug']}/",
-                        "difficulty": q["difficulty"],
-                        "ac_rate": round(q.get("acRate", 0), 1)
-                    }
-                    for q in raw_list
-                    if not q.get("isPaidOnly") and str(q.get("questionFrontendId")) != str(exclude_id)
-                ]
-                return free
-        except Exception as e:
-            print(f"Error fetching practice diff {diff_str}: {e}")
-            return []
+        for attempt in range(1, 4):
+            try:
+                async with session.post(
+                    LEETCODE_URL,
+                    json={"query": query, "variables": variables},
+                    headers=HEADERS,
+                    timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    resp.raise_for_status()
+                    res = await resp.json()
+                    raw_list = res.get("data", {}).get("problemsetQuestionList", {}).get("questions", [])
+                    free = [
+                        {
+                            "id": q["questionFrontendId"],
+                            "title": q["title"],
+                            "url": f"https://leetcode.com/problems/{q['titleSlug']}/",
+                            "difficulty": q["difficulty"],
+                            "ac_rate": round(q.get("acRate", 0), 1)
+                        }
+                        for q in raw_list
+                        if not q.get("isPaidOnly") and str(q.get("questionFrontendId")) != str(exclude_id)
+                    ]
+                    return free
+            except Exception as e:
+                if attempt < 3:
+                    await asyncio.sleep(2 * attempt)
+                else:
+                    print(f"Error fetching practice diff {diff_str} after retries: {e}")
+        return []
 
     # 1. Fetch candidates for Easy, Medium, Hard
     easy_candidates = await _query_diff(topic_slug, "EASY")
