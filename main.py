@@ -38,10 +38,6 @@ from leetcode import (
 from phrases import (
     get_morning_title,
     get_morning_quote,
-    get_midday_title,
-    get_midday_quote,
-    get_evening_title,
-    get_evening_quote,
     get_trigger_quote,
     get_solved_title,
     get_solved_subtitle,
@@ -61,10 +57,6 @@ TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")
 # Schedules in IST
 MORNING_HOUR = int(os.getenv("MORNING_HOUR", "8"))
 MORNING_MINUTE = int(os.getenv("MORNING_MINUTE", "0"))
-AFTERNOON_HOUR = int(os.getenv("AFTERNOON_HOUR", "13"))
-AFTERNOON_MINUTE = int(os.getenv("AFTERNOON_MINUTE", "0"))
-EVENING_HOUR = int(os.getenv("EVENING_HOUR", "20"))
-EVENING_MINUTE = int(os.getenv("EVENING_MINUTE", "30"))
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -101,26 +93,6 @@ class LeetCodeBot(commands.Bot):
             timezone=tz
         )
         print(f"Scheduled 8:00 AM challenge post at {MORNING_HOUR:02d}:{MORNING_MINUTE:02d} {TIMEZONE}.")
-
-        # 1:00 PM IST - Midday check-in (pings only pending participants)
-        self.scheduler.add_job(
-            send_afternoon_checkin_job,
-            "cron",
-            hour=AFTERNOON_HOUR,
-            minute=AFTERNOON_MINUTE,
-            timezone=tz
-        )
-        print(f"Scheduled 1:00 PM check-in at {AFTERNOON_HOUR:02d}:{AFTERNOON_MINUTE:02d} {TIMEZONE}.")
-
-        # 8:30 PM IST - Evening check-in (pings only pending participants)
-        self.scheduler.add_job(
-            send_evening_checkin_job,
-            "cron",
-            hour=EVENING_HOUR,
-            minute=EVENING_MINUTE,
-            timezone=tz
-        )
-        print(f"Scheduled 8:30 PM evening reminder at {EVENING_HOUR:02d}:{EVENING_MINUTE:02d} {TIMEZONE}.")
 
         # Sunday 11:00 AM IST - Weekly Champion Spotlight
         self.scheduler.add_job(
@@ -219,8 +191,7 @@ async def handle_solve_interaction(interaction: discord.Interaction):
             embed = discord.Embed(
                 title="Already Logged! 🎯",
                 description=(
-                    f"You have already marked today's challenge (`{today_date}`) as completed!\n"
-                    f"You are safe from the 1:00 PM and 8:30 PM reminder pings.\n\n"
+                    f"You have already marked today's challenge (`{today_date}`) as completed!\n\n"
                     f"🔥 Current Streak: **{res['current_streak']} days**\n"
                     f"🏆 Best Streak: **{res['highest_streak']} days**\n"
                     f"📚 Total Solved: **{res['total_solved']} problems**"
@@ -237,8 +208,7 @@ async def handle_solve_interaction(interaction: discord.Interaction):
             title=title,
             description=(
                 f"{subtitle}\n\n"
-                f"Congratulations {interaction.user.mention}! Your submission for `{today_date}` has been logged.\n"
-                f"You will **not** be pinged in today's check-ins.\n\n"
+                f"Congratulations {interaction.user.mention}! Your submission for `{today_date}` has been logged.\n\n"
                 f"🔥 Current Streak: **{res['current_streak']} days**\n"
                 f"🏆 Best Streak: **{res['highest_streak']} days**\n"
                 f"📚 Total Solved: **{res['total_solved']} problems**"
@@ -338,160 +308,6 @@ async def send_morning_announcement_job():
                     pass
 
 
-async def send_afternoon_checkin_job():
-    """1:00 PM IST: Checks who completed, pings pending members, and tags completed solvers with bonus practice problems."""
-    channel = bot.get_channel(CHANNEL_ID)
-    if not channel:
-        return
-    try:
-        today_date = get_current_date_str()
-        if not is_announcement_posted_today(today_date):
-            print(f"1:00 PM check-in detected missing announcement for {today_date}. Posting announcement first...")
-            await send_morning_announcement_job()
-            return
-
-        status = get_challenge_status(today_date)
-        completed = status["completed"]
-        pending = status["pending"]
-
-        problem = await fetch_leetcode_daily(bot.session)
-        practice_data = await get_or_fetch_bonus_problems(problem)
-        practice_embed = create_practice_embed(practice_data)
-
-        # Case 1: 100% Completed
-        if not pending:
-            completed_pings = build_participant_pings(completed)
-            sweep_title = get_server_sweep_title()
-            sweep_desc = get_server_sweep_desc()
-            embed = discord.Embed(
-                title=sweep_title,
-                description=(
-                    f"{sweep_desc}\n\n"
-                    f"Today's problem: **[{problem['title']}]({problem['url']})** 🚀\n"
-                    f"No pending reminders needed. Enjoy your bonus practice challenges below!"
-                ),
-                color=discord.Color.green()
-            )
-            content = f"{completed_pings} 🌟 **100% Completed!** All participants conquered today's challenge!"
-            await channel.send(content=content, embeds=[embed, practice_embed])
-            print(f"1:00 PM check-in: 100% completed ({len(completed)} solvers).")
-            return
-
-        # Case 2: Mixed or Pending
-        pending_pings = build_participant_pings(pending)
-        title = get_midday_title()
-        quote = get_midday_quote()
-        embed = discord.Embed(
-            title=title,
-            description=(
-                f"Today's problem: **[{problem['title']}]({problem['url']})** ({problem['difficulty']})\n\n"
-                f"> *\"{quote}\"*"
-            ),
-            color=discord.Color.gold()
-        )
-
-        if completed:
-            completed_names = ", ".join([f"`{c['username']}`" for c in completed])
-            embed.add_field(name="Completed Already 🏅 (Safe from pings)", value=completed_names, inline=False)
-
-        pending_names = ", ".join([f"`{p['username']}`" for p in pending])
-        embed.add_field(name="Still Pending ⏳", value=pending_names, inline=False)
-        embed.set_footer(text="Click 'Mark Solved ✅' below or use /solved to continue your streak privately!")
-
-        if completed:
-            completed_pings = build_participant_pings(completed)
-            content = (
-                f"{pending_pings} ⏰ **1:00 PM Check-In!** Today's LeetCode challenge is waiting for you.\n\n"
-                f"{completed_pings} 🎯 **Next Level Practice:** You already conquered today's challenge! "
-                f"Level up with today's 4 bonus challenges below:"
-            )
-            embeds = [embed, practice_embed]
-        else:
-            content = f"{pending_pings} ⏰ **1:00 PM Check-In!** Today's LeetCode challenge is waiting for you."
-            embeds = [embed]
-
-        msg = await channel.send(content=content, embeds=embeds, view=SolvedButtonView())
-        save_daily_post(today_date, msg.id, channel.id, post_type="checkin")
-        print(f"1:00 PM check-in posted: {len(pending)} pending, {len(completed)} completed (msg_id: {msg.id}).")
-    except Exception as e:
-        print(f"Failed to send 1:00 PM check-in: {e}")
-
-
-async def send_evening_checkin_job():
-    """8:30 PM IST: Evening reminder pinging remaining pending members and tagging completed solvers."""
-    channel = bot.get_channel(CHANNEL_ID)
-    if not channel:
-        return
-    try:
-        today_date = get_current_date_str()
-        status = get_challenge_status(today_date)
-        completed = status["completed"]
-        pending = status["pending"]
-
-        problem = await fetch_leetcode_daily(bot.session)
-        practice_data = await get_or_fetch_bonus_problems(problem)
-        practice_embed = create_practice_embed(practice_data)
-
-        # Case 1: 100% Completed
-        if not pending:
-            completed_pings = build_participant_pings(completed)
-            sweep_title = get_server_sweep_title()
-            sweep_desc = get_server_sweep_desc()
-            embed = discord.Embed(
-                title=sweep_title,
-                description=(
-                    f"{sweep_desc}\n\n"
-                    f"Every participant conquered today's challenge: "
-                    f"**[{problem['title']}]({problem['url']})**!\n\n"
-                    f"All streaks are safe and accounted for. Great job team! 🔥"
-                ),
-                color=discord.Color.green()
-            )
-            content = f"{completed_pings} 🌟 **100% Completed!** Every participant kept their streak intact today!"
-            await channel.send(content=content, embeds=[embed, practice_embed])
-            print("8:30 PM check-in: 100% completed.")
-            return
-
-        # Case 2: Mixed or Pending
-        pending_pings = build_participant_pings(pending)
-        title = get_evening_title()
-        quote = get_evening_quote()
-        embed = discord.Embed(
-            title=title,
-            description=(
-                f"**[{problem['title']}]({problem['url']})** ({problem['difficulty']})\n\n"
-                f"> *\"{quote}\"*"
-            ),
-            color=discord.Color.red()
-        )
-
-        if completed:
-            completed_names = ", ".join([f"`{c['username']}`" for c in completed])
-            embed.add_field(name="Completed 🏅", value=completed_names, inline=False)
-
-        pending_names = ", ".join([f"`{p['username']}`" for p in pending])
-        embed.add_field(name="Action Required ⚠️", value=pending_names, inline=False)
-        embed.set_footer(text="Click 'Mark Solved ✅' below or use /solved now to save your streak privately!")
-
-        if completed:
-            completed_pings = build_participant_pings(completed)
-            content = (
-                f"{pending_pings} 🌙 **8:30 PM Reminder!** Keep your daily streak alive before the reset!\n\n"
-                f"{completed_pings} 🎯 **Bonus Practice:** High-five for finishing today's challenge! "
-                f"Check out today's bonus problem track below:"
-            )
-            embeds = [embed, practice_embed]
-        else:
-            content = f"{pending_pings} 🌙 **8:30 PM Reminder!** Keep your daily streak alive before the reset!"
-            embeds = [embed]
-
-        msg = await channel.send(content=content, embeds=embeds, view=SolvedButtonView())
-        save_daily_post(today_date, msg.id, channel.id, post_type="checkin")
-        print(f"8:30 PM reminder posted: {len(pending)} pending, {len(completed)} completed (msg_id: {msg.id}).")
-    except Exception as e:
-        print(f"Failed to send 8:30 PM reminder: {e}")
-
-
 async def send_sunday_champion_job():
     """Sunday 11:00 AM IST: Showcases and congratulates the #1 streak champion of the week."""
     channel = bot.get_channel(CHANNEL_ID)
@@ -542,15 +358,14 @@ async def prune_expired_participants_job():
 
 
 async def check_and_recover_announcement_job():
-    """Watchdog: Checks between 8:00 AM and 1:00 PM if the announcement was missed due to network/downtime and posts it."""
+    """Watchdog: Checks after 8:00 AM if the announcement was missed due to network/downtime and posts it."""
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz)
     now_minutes = now.hour * 60 + now.minute
-    # Between 8:00 AM and 1:00 PM (480 to 780 minutes)
-    if 480 <= now_minutes < 780:
+    if now_minutes >= 480:
         today_date = now.strftime("%Y-%m-%d")
         if not is_announcement_posted_today(today_date):
-            print(f"Watchdog triggered: Missed 8:00 AM post detected for {today_date}. Recovering now...")
+            print(f"Watchdog triggered: Missed daily announcement detected for {today_date}. Recovering now...")
             await send_morning_announcement_job()
 
 
@@ -778,7 +593,7 @@ def build_help_embed() -> discord.Embed:
         title="🚀 LeetCode Daily Bot — Guide & Help",
         description=(
             "Welcome! This bot manages daily LeetCode challenges, provides spoiler-safe hints, "
-            "and automatically tracks your streaks while respecting your time with smart check-in pings.\n"
+            "and automatically tracks your streaks and personal stats.\n"
         ),
         color=discord.Color.from_rgb(255, 161, 22)
     )
@@ -787,24 +602,18 @@ def build_help_embed() -> discord.Embed:
         name="⏰ Daily Automated Schedule (IST)",
         value=(
             f"• **8:00 AM** (`{MORNING_HOUR:02d}:{MORNING_MINUTE:02d}`) — Daily challenge announcement (pings active participants)\n"
-            f"• **1:00 PM** (`{AFTERNOON_HOUR:02d}:{AFTERNOON_MINUTE:02d}`) — Midday check-in (**only pings members who haven't completed**)\n"
-            f"• **8:30 PM** (`{EVENING_HOUR:02d}:{EVENING_MINUTE:02d}`) — Evening reminder (**only pings members who haven't completed**)\n"
             f"• **Sunday 11:00 AM** — Weekly Champion Spotlight crowning the #1 streak leader!"
         ),
         inline=False
     )
 
     embed.add_field(
-        name="🔥 How Streak Tracking & Smart Pings Work",
+        name="🔥 How Streak Tracking Works",
         value=(
-            "1. **Private Mark Solved**: Click the **Mark Solved ✅** button on any challenge or check-in card OR run `/solved`! Your completion and bonus practice track are 100% private (`Only you can see this`).\n"
-            "2. **Quiet Emoji Reaction**: Clicking the **✅** reaction also logs your completion quietly without posting any messages into the channel.\n"
-            "3. **Cascading Smart Exemptions**:\n"
-            "   • Solve before 1:00 PM ➔ **Zero pings** at 1:00 PM & 8:30 PM.\n"
-            "   • Solve at or after 1:00 PM ➔ **Zero pings** at 8:30 PM.\n"
-            "   • Only members who still haven't solved get pinged in reminders!\n"
-            "4. **Public Milestone Shoutouts**: When you conquer landmark streaks of **7, 28, 56, and monthly marks (30, 60, 90... days)**, the server celebrates your achievement publicly!\n"
-            "5. **60-Day Data Retention**: If you `/leave`, your streak history is preserved for 60 days before deletion."
+            "1. **Private Mark Solved**: Click the **Mark Solved ✅** button on the challenge card OR run `/solved`! Your completion and bonus practice track are 100% private (`Only you can see this`).\n"
+            "2. **Quiet Emoji Reaction**: Reacting with **✅** on the challenge post also logs your completion quietly.\n"
+            "3. **Public Milestone Shoutouts**: When you conquer landmark streaks of **7, 28, 56, and monthly marks (30, 60, 90... days)**, the server celebrates your achievement publicly!\n"
+            "4. **60-Day Data Retention**: If you `/leave`, your streak history is preserved for 60 days before deletion."
         ),
         inline=False
     )
@@ -814,13 +623,13 @@ def build_help_embed() -> discord.Embed:
         value=(
             "• `/daily` — View today's active challenge & stats\n"
             "• `/practice` — View today's 4 similar practice problems (2 Easy, 1 Medium, 1 Hard)\n"
-            "• `/trigger` — Smart trigger: posts challenge early (5:30–8:00 AM, skips 8 AM cron) OR on-demand check-in pinging only pending members (after 8 AM)\n"
+            "• `/trigger` — Smart trigger: posts challenge early (if not posted yet) or shows today's status\n"
             "• `/hint [num]` — Reveal progressive hints privately with spoiler tags (`||hint||`)\n"
             "• `/solved` — Mark today's challenge as solved privately (`Only you can see this`)\n"
             "• `/streak [@user]` — View personal or another member's streak stats\n"
             "• `/leaderboard` — View the top streak leaders in the server\n"
             "• `/participants` — View currently enrolled active participants\n"
-            "• `/join` / `/leave` — Enroll into or opt out of daily challenge pings\n"
+            "• `/join` / `/leave` — Enroll into or opt out of daily challenge announcements\n"
             "• `/help` — Display this guide\n"
             "• `/ping` — Check bot response latency"
         ),

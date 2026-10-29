@@ -23,17 +23,14 @@ An asynchronous, intelligent Discord bot that posts daily LeetCode challenges, p
   - If a member uses `/leave`, their solved history and streak data are preserved for 60 days (2 months).
   - Rejoining via `/join` or `/solved` within 60 days restores full history seamlessly; after 60 days of inactivity, expired records are permanently pruned.
 - **💬 Dynamic Rotating Phrases & Quotes**:
-  - Dynamic rotational phrases and quotes across morning announcements, midday check-ins, evening reminders, solves, and 100% team sweeps.
-  - Motivational quotes are exclusively reserved for announcements and check-ins, keeping `/daily` problem specifications clean and focused.
-- **⏰ 3-Stage Smart Reminders with Cascading Exemptions (IST)**:
-  - **8:00 AM IST**: Daily challenge announcement (only pings enrolled participants).
-  - **1:00 PM IST**: Midday check-in (**only pings members who haven't completed yet**; members who solved earlier are completely exempt from pings).
-  - **8:30 PM IST**: Evening reminder (**only pings members who STILL haven't completed**; anyone who solved at or after 1:00 PM is also exempt!).
-  - If 100% of participants have finished, posts a celebration message with **zero pings**.
+  - Dynamic rotational phrases and quotes across morning announcements, solves, and server celebrations.
+  - Motivational quotes are exclusively reserved for morning announcements, keeping `/daily` problem specifications clean and focused.
+- **⏰ Daily Automated Schedule (IST)**:
+  - **8:00 AM IST**: Daily challenge announcement (pings active participants with the daily problem and interactive `Mark Solved ✅` button).
+  - **Sunday 11:00 AM IST**: Weekly Champion Spotlight crowning the server's #1 streak leader.
 - **🎯 Dynamic Trigger Command (`/trigger`)**:
   - **Between 5:30 AM and 8:00 AM IST**: Posts the official daily announcement early and automatically skips the scheduled 8:00 AM post to prevent duplicates.
-  - **After 8:00 AM IST**: Evaluates the live completion status and sends an on-demand check-in pinging **only** pending members.
-  - Does not alter or cancel the independent 1:00 PM or 8:30 PM scheduled check-ins.
+  - **After 8:00 AM IST**: Displays the live daily completion status on demand.
 - **📚 Curated Bonus Practice Track (2 Easy, 1 Medium, 1 Hard)**:
   - Dynamically queries LeetCode for 4 similar free practice problems matching today's primary topic.
   - Cached daily in SQLite (`bonus_problems`) for zero latency.
@@ -93,10 +90,6 @@ CHANNEL_ID=your_channel_id_here
 TIMEZONE=Asia/Kolkata
 MORNING_HOUR=8
 MORNING_MINUTE=0
-AFTERNOON_HOUR=13
-AFTERNOON_MINUTE=0
-EVENING_HOUR=20
-EVENING_MINUTE=30
 ```
 
 ### 4. Discord Developer Portal Settings
